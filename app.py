@@ -1,547 +1,455 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
+import math
+from datetime import datetime, timedelta
+
 import numpy as np
+import pandas as pd
+import yfinance as yf
 import plotly.graph_objects as go
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
+import streamlit as st
 
-# ------------------------------------------------------------
-# Universe definitions
-# ------------------------------------------------------------
 
-def get_universes():
-    # SPDR sector ETFs
-    sectors = {
-        "XLB  Materials": "XLB",
-        "XLC  Communication Services": "XLC",
-        "XLE  Energy": "XLE",
-        "XLF  Financials": "XLF",
-        "XLI  Industrials": "XLI",
-        "XLK  Technology": "XLK",
-        "XLP  Consumer Staples": "XLP",
+# ---------- Configuration ---------- #
+
+# Predefined universes
+UNIVERSES = {
+    "SPDR Sectors": {
+        "XLB Materials": "XLB",
+        "XLC Communication Services": "XLC",
+        "XLE Energy": "XLE",
+        "XLF Financials": "XLF",
+        "XLI Industrials": "XLI",
+        "XLK Technology": "XLK",
+        "XLP Consumer Staples": "XLP",
         "XLRE Real Estate": "XLRE",
-        "XLU  Utilities": "XLU",
-        "XLV  Health Care": "XLV",
-        "XLY  Consumer Discretionary": "XLY",
-    }
-
-    # Theme ETFs (from your sheet; labels kept descriptive)
-    themes = {
-        "Semiconductors 1 (SOXX)": "SOXX",
+        "XLU Utilities": "XLU",
+        "XLV Health Care": "XLV",
+        "XLY Consumer Discretionary": "XLY",
+    },
+    "Themes ETFs": {
+        "Semiconductors (SOXX)": "SOXX",
         "Semiconductors 2 (SMH)": "SMH",
-        "Cybersecurity 1 (CIBR)": "CIBR",
+        "Cybersecurity (CIBR)": "CIBR",
         "Cybersecurity 2 (HACK)": "HACK",
-        "Cloud 1 (CLOU)": "CLOU",
+        "Cloud (CLOU)": "CLOU",
         "Cloud 2 (SKYY)": "SKYY",
         "Software (IGV)": "IGV",
-        "Defense & Aerospace 1 (ITA)": "ITA",
+        "Defense & Aerospace (ITA)": "ITA",
         "Defense & Aerospace 2 (XAR)": "XAR",
         "European Defense (EUAD)": "EUAD",
         "Clean Energy (ICLN)": "ICLN",
         "Solar (TAN)": "TAN",
         "Fintech / Innovation (ARKF)": "ARKF",
         "Infrastructure (PAVE)": "PAVE",
-        "Digital Infrastructure 1 (DTCR)": "DTCR",
+        "Digital Infrastructure (DTCR)": "DTCR",
         "Digital Infrastructure 2 (TCAI)": "TCAI",
-        "Bitcoin Mining / HPC 1 (WGMI)": "WGMI",
-        "Bitcoin Mining / HPC 2 (STCE)": "STCE",
+        "Bitcoin Mining / HPC (STCE)": "STCE",
+        "Bitcoin Mining / HPC 2 (WGMI)": "WGMI",
         "Home Construction (ITB)": "ITB",
-        "Natural Gas 1 (BOIL)": "BOIL",
+        "Natural Gas (BOIL)": "BOIL",
         "Natural Gas 2 (XOP)": "XOP",
-        "Robotics 1 (ROBO)": "ROBO",
+        "Robotics (ROBO)": "ROBO",
         "Robotics 2 (BOTZ)": "BOTZ",
-        "Nuclear 1 (NLR)": "NLR",
+        "Nuclear (NLR)": "NLR",
         "Nuclear 2 (NUKZ)": "NUKZ",
-        "Biotech 1 (XBI)": "XBI",
+        "Biotech (XBI)": "XBI",
         "Biotech 2 (BIB)": "BIB",
         "Pharmaceutical (PPH)": "PPH",
-        "Drone 1 (JEDI)": "JEDI",
+        "Drone (JEDI)": "JEDI",
         "Drone 2 (ARKQ)": "ARKQ",
-        "Brokerage 1 (IAI)": "IAI",
+        "Brokerage (RTH)": "RTH",
+        "Brokerage 2 (IAI)": "IAI",
         "Retail Shopping (XRT)": "XRT",
-        "Utilities (PUI)": "PUI",
+        "Utilities (PUJ)": "PUJ",
+        "SPAC (SPXC)": "SPXC",
         "Regional Banking (KRE)": "KRE",
         "Banking (KBE)": "KBE",
         "Airlines (JETS)": "JETS",
         "Rare Earth (REMX)": "REMX",
         "Quantum (QTUM)": "QTUM",
         "Cannabis (MSOS)": "MSOS",
-    }
-
-    # Commodity ETFs
-    commodities = {
-        "Gold 1 (RING)": "RING",
+    },
+    "Commodity ETFs": {
+        "Gold (GLD)": "GLD",
         "Gold 2 (IAU)": "IAU",
-        "Silver 1 (SLV)": "SLV",
+        "Silver (SLV)": "SLV",
         "Silver 2 (SIL)": "SIL",
-        "Copper (COPX)": "COPX",
-        "Oil 1 (OIL)": "OIL",
-        "Oil 2 (BNO)": "BNO",
+        "Copper (CPER)": "CPER",
+        "Oil (USO)": "USO",
+        "Bitcoin (BITO)": "BITO",
         "Ethereum (ETHA)": "ETHA",
         "Solana (BSOL)": "BSOL",
-    }
-
-    # Country / region ETFs
-    countries = {
-        "All World ex US (VEU)": "VEU",
-        "Emerging Markets ex China (EMXC)": "EMXC",
+    },
+    "Country ETFs": {
+        "US (SPY)": "SPY",
+        "World ex-US (VEU)": "VEU",
+        "Emerging Mkts ex-China (EMXC)": "EMXC",
         "Brazil (EWZ)": "EWZ",
-        "India (INDA)": "INDA",
-        "China 1 (MCHI)": "MCHI",
+        "China (MCHI)": "MCHI",
         "China 2 (KWEB)": "KWEB",
-        "Chile (ECH)": "ECH",
+        "Japan (EWJ)": "EWJ",
         "Germany (EWG)": "EWG",
         "Canada (EWC)": "EWC",
         "Singapore (EWS)": "EWS",
-    }
+    },
+}
 
-    universes = {
-        "SPDR Sectors": sectors,
-        "Themes ETFs": themes,
-        "Commodity ETFs": commodities,
-        "Country ETFs": countries,
-    }
-
-    default_benchmarks = {
-        "SPDR Sectors": "SPY",
-        "Themes ETFs": "SPY",
-        "Commodity ETFs": "DBC",
-        "Country ETFs": "ACWI",
-    }
-
-    return universes, default_benchmarks
+DEFAULT_BENCHMARK = "SPY"
 
 
-# ------------------------------------------------------------
-# Data + RRG calculations
-# ------------------------------------------------------------
+# ---------- Data utilities ---------- #
 
-def download_prices(symbols, start, end):
+def compute_needed_years(lookback_wk: int, mom_wk: int, tail_wk: int) -> int:
+    """
+    Rough estimate of how many years of weekly data we need to
+    support the requested lookback / momentum / tail.
+    """
+    needed_weeks = lookback_wk + mom_wk + tail_wk + 5  # small safety buffer
+    return max(1, math.ceil(needed_weeks / 52))
+
+
+@st.cache_data(show_spinner=False)
+def download_daily(tickers, years: int) -> pd.DataFrame:
+    end = datetime.today()
+    start = end - timedelta(days=years * 365)
     data = yf.download(
-        symbols,
+        tickers=list(tickers),
         start=start,
         end=end,
+        interval="1d",
         auto_adjust=True,
         progress=False,
+        group_by="ticker",
+        threads=True,
     )
-    if isinstance(data, pd.DataFrame) and "Close" in data.columns:
-        prices = data["Close"]
+    # yfinance returns a multi-index when multiple tickers are requested
+    if isinstance(data.columns, pd.MultiIndex):
+        close = data["Close"].copy()
+        close.columns = close.columns.astype(str)
     else:
-        # yfinance returns a Series when there is only one symbol
-        prices = data
-    return prices
+        close = data["Close"].to_frame()
+    return close
 
 
-def build_rrg_data(prices_w, symbols, benchmark, lookback, momentum, tail_len):
+def resample_weekly(close_df: pd.DataFrame) -> pd.DataFrame:
+    """Resample daily closes to weekly (Friday) closes."""
+    weekly = close_df.resample("W-FRI").last().dropna(how="all")
+    return weekly
+
+
+# ---------- RRG calculations ---------- #
+
+def make_rrg_series(
+    weekly_prices: pd.DataFrame,
+    benchmark: str,
+    lookback_wk: int,
+    mom_wk: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
-    prices_w: weekly prices DataFrame (columns = symbols + benchmark)
+    Compute standardized RS-Ratio and RS-Momentum series.
     Returns:
-        rrg_dict: {symbol: DataFrame with RS_Ratio, RS_Momentum}
-        snapshot: DataFrame with last point per symbol
-        skipped: list of (symbol, available_points, required_points)
+      rs_z: DataFrame of RS-Ratio (z-scored) by symbol
+      mom_z: DataFrame of RS-Momentum (z-scored) by symbol
+      dropped: dict of {symbol: (have_points, need_points)}
     """
-    min_points = lookback + momentum + tail_len + 4
+    tickers = [c for c in weekly_prices.columns if c != benchmark]
+    bench_series = weekly_prices[benchmark]
 
-    rrg_dict = {}
-    snapshots = []
-    skipped = []
+    # Relative strength vs benchmark
+    rel = weekly_prices[tickers].div(bench_series, axis=0)
 
-    for sym in symbols:
-        if sym not in prices_w.columns:
-            skipped.append((sym, 0, min_points))
-            continue
+    # RS-Ratio: ratio vs lookback weeks ago
+    rs = rel / rel.shift(lookback_wk)
 
-        df = pd.DataFrame({"asset": prices_w[sym], "bench": prices_w[benchmark]}).dropna()
-        n = len(df)
-        if n < min_points:
-            skipped.append((sym, n, min_points))
-            continue
+    # RS-Momentum: change in RS-Ratio over the momentum window
+    rs_mom = rs / rs.shift(mom_wk) - 1
 
-        rs = df["asset"] / df["bench"]
+    # Standardize (z-score) over time for each column
+    rs_z = (rs - rs.mean()) / rs.std(ddof=0)
+    mom_z = (rs_mom - rs_mom.mean()) / rs_mom.std(ddof=0)
 
-        # RS-Ratio: z-score of relative strength over rolling lookback
-        rolling_mean = rs.rolling(lookback).mean()
-        rolling_std = rs.rolling(lookback).std()
-        rs_ratio = (rs - rolling_mean) / rolling_std
+    # Drop columns that don't have enough valid points near the end
+    dropped = {}
+    min_points = mom_wk + 5  # need at least a handful of points after momentum
+    valid_cols = []
+    for sym in tickers:
+        non_na = mom_z[sym].dropna()
+        have = len(non_na)
+        if have >= min_points:
+            valid_cols.append(sym)
+        else:
+            dropped[sym] = (have, min_points)
 
-        # RS-Momentum: change in RS-Ratio over "momentum" window
-        rs_mom = rs_ratio.diff(momentum)
+    if not valid_cols:
+        return pd.DataFrame(), pd.DataFrame(), dropped
 
-        rrg = pd.DataFrame(
-            {"RS_Ratio": rs_ratio, "RS_Momentum": rs_mom}
-        ).dropna()
+    rs_z = rs_z[valid_cols]
+    mom_z = mom_z[valid_cols]
 
-        if len(rrg) < tail_len:
-            skipped.append((sym, len(rrg), tail_len))
-            continue
-
-        rrg_tail = rrg.iloc[-tail_len:].copy()
-        rrg_dict[sym] = rrg_tail
-
-        last = rrg_tail.iloc[-1]
-        snapshots.append(
-            {
-                "Symbol": sym,
-                "RS_Ratio": float(last["RS_Ratio"]),
-                "RS_Momentum": float(last["RS_Momentum"]),
-            }
-        )
-
-    if not snapshots:
-        return {}, None, skipped
-
-    snapshot_df = pd.DataFrame(snapshots)
-    snapshot_df["Quadrant"] = snapshot_df.apply(
-        lambda r: classify_quadrant(r["RS_Ratio"], r["RS_Momentum"]), axis=1
-    )
-
-    return rrg_dict, snapshot_df, skipped
+    return rs_z, mom_z, dropped
 
 
-def classify_quadrant(x, y):
-    if x >= 0 and y >= 0:
-        return "Leading"
-    elif x >= 0 and y < 0:
-        return "Weakening"
-    elif x < 0 and y < 0:
-        return "Lagging"
-    else:
-        return "Improving"
+# ---------- Plotting ---------- #
 
-
-def make_rrg_figure(rrg_dict, label_map):
-    # Collect all points to set symmetric axis ranges
-    all_x, all_y = [], []
-    for sym, df in rrg_dict.items():
-        all_x.extend(df["RS_Ratio"].values)
-        all_y.extend(df["RS_Momentum"].values)
-
-    if not all_x:
-        return go.Figure()
-
-    all_x = np.array(all_x)
-    all_y = np.array(all_y)
-    max_extent = float(max(np.max(np.abs(all_x)), np.max(np.abs(all_y))))
-    pad = 0.5
-    axis_range = [-max_extent - pad, max_extent + pad]
-
+def build_rrg_figure(
+    rs_z: pd.DataFrame,
+    mom_z: pd.DataFrame,
+    labels: dict,
+    tail_len: int,
+) -> go.Figure:
     fig = go.Figure()
 
-    # Quadrant shading
-    r0, r1 = axis_range
-    quad_shapes = [
-        # Leading (top-right)
-        dict(
-            type="rect",
-            x0=0,
-            x1=r1,
-            y0=0,
-            y1=r1,
-            fillcolor="rgba(0, 200, 0, 0.05)",
-            line_width=0,
-        ),
-        # Weakening (bottom-right)
-        dict(
-            type="rect",
-            x0=0,
-            x1=r1,
-            y0=r0,
-            y1=0,
-            fillcolor="rgba(255, 165, 0, 0.05)",
-            line_width=0,
-        ),
-        # Lagging (bottom-left)
-        dict(
-            type="rect",
-            x0=r0,
-            x1=0,
-            y0=r0,
-            y1=0,
-            fillcolor="rgba(200, 0, 0, 0.05)",
-            line_width=0,
-        ),
-        # Improving (top-left)
-        dict(
-            type="rect",
-            x0=r0,
-            x1=0,
-            y0=0,
-            y1=r1,
-            fillcolor="rgba(0, 0, 200, 0.05)",
-            line_width=0,
-        ),
-    ]
-    fig.update_layout(shapes=quad_shapes)
+    # Fixed axis range for clean quadrants
+    x_range = [-3, 3]
+    y_range = [-3, 3]
 
-    # Quadrant labels
-    fig.add_annotation(
-        x=r1 * 0.7,
-        y=r1 * 0.7,
-        text="Leading",
-        showarrow=False,
-        font=dict(color="green"),
-    )
-    fig.add_annotation(
-        x=r1 * 0.7,
-        y=r0 * 0.7,
-        text="Weakening",
-        showarrow=False,
-        font=dict(color="orange"),
-    )
-    fig.add_annotation(
-        x=r0 * 0.7,
-        y=r0 * 0.7,
-        text="Lagging",
-        showarrow=False,
-        font=dict(color="red"),
-    )
-    fig.add_annotation(
-        x=r0 * 0.7,
-        y=r1 * 0.7,
-        text="Improving",
-        showarrow=False,
-        font=dict(color="blue"),
+    # Quadrant shading
+    fig.update_layout(
+        shapes=[
+            # Leading (top-right)
+            dict(
+                type="rect",
+                x0=0,
+                x1=x_range[1],
+                y0=0,
+                y1=y_range[1],
+                fillcolor="rgba(0, 200, 0, 0.05)",
+                line_width=0,
+                layer="below",
+            ),
+            # Weakening (bottom-right)
+            dict(
+                type="rect",
+                x0=0,
+                x1=x_range[1],
+                y0=y_range[0],
+                y1=0,
+                fillcolor="rgba(255, 165, 0, 0.05)",
+                line_width=0,
+                layer="below",
+            ),
+            # Lagging (bottom-left)
+            dict(
+                type="rect",
+                x0=x_range[0],
+                x1=0,
+                y0=y_range[0],
+                y1=0,
+                fillcolor="rgba(255, 0, 0, 0.04)",
+                line_width=0,
+                layer="below",
+            ),
+            # Improving (top-left)
+            dict(
+                type="rect",
+                x0=x_range[0],
+                x1=0,
+                y0=0,
+                y1=y_range[1],
+                fillcolor="rgba(0, 0, 255, 0.04)",
+                line_width=0,
+                layer="below",
+            ),
+        ]
     )
 
     # Add tails
-    for sym, df in rrg_dict.items():
-        label = label_map.get(sym, sym)
+    for sym in rs_z.columns:
+        x = rs_z[sym].dropna().tail(tail_len)
+        y = mom_z[sym].dropna().tail(tail_len)
+        if len(x) < 2 or len(y) < 2:
+            continue
+
         fig.add_trace(
             go.Scatter(
-                x=df["RS_Ratio"],
-                y=df["RS_Momentum"],
+                x=x,
+                y=y,
                 mode="lines+markers",
-                name=label,
-                text=[label] * len(df),
+                name=labels.get(sym, sym),
+                text=[labels.get(sym, sym)] * len(x),
                 hovertemplate=(
-                    "%{text}<br>RS-Ratio: %{x:.2f}<br>"
-                    "RS-Momentum: %{y:.2f}<extra></extra>"
+                    "%{text}<br>RS-Ratio: %{x:.2f}<br>RS-Momentum: %{y:.2f}<extra></extra>"
                 ),
             )
         )
 
-        # Highlight last point
-        last = df.iloc[-1]
-        fig.add_trace(
-            go.Scatter(
-                x=[last["RS_Ratio"]],
-                y=[last["RS_Momentum"]],
-                mode="markers",
-                marker=dict(size=10, symbol="circle", line=dict(width=1, color="black")),
-                showlegend=False,
-                hoverinfo="skip",
-            )
-        )
-
-    fig.update_xaxes(
-        title="RS-Ratio (standardized)",
-        zeroline=True,
-        zerolinewidth=1,
-        zerolinecolor="black",
-        range=axis_range,
-    )
-    fig.update_yaxes(
-        title="RS-Momentum (standardized)",
-        zeroline=True,
-        zerolinewidth=1,
-        zerolinecolor="black",
-        range=axis_range,
-    )
-
+    # Axis & quadrant labels
     fig.update_layout(
-        title="Relative Rotation Graph (RRG)",
-        legend=dict(
-            title="Tails (most recent point highlighted)", orientation="v", x=1.02, y=1
+        xaxis=dict(
+            title="RS-Ratio (standardized)",
+            zeroline=True,
+            zerolinewidth=1,
+            zerolinecolor="gray",
+            range=x_range,
         ),
-        margin=dict(l=40, r=220, t=60, b=40),
+        yaxis=dict(
+            title="RS-Momentum (standardized)",
+            zeroline=True,
+            zerolinewidth=1,
+            zerolinecolor="gray",
+            range=y_range,
+        ),
+        legend=dict(
+            title="Tails (most recent point highlighted)",
+            orientation="v",
+            x=1.02,
+            y=1.0,
+        ),
+        margin=dict(l=40, r=260, t=40, b=40),
+        height=650,
     )
+
+    # Quadrant text labels
+    fig.add_annotation(x=2.3, y=1.8, text="Leading", showarrow=False, font=dict(color="green"))
+    fig.add_annotation(x=2.3, y=-1.8, text="Weakening", showarrow=False, font=dict(color="darkorange"))
+    fig.add_annotation(x=-2.3, y=-1.8, text="Lagging", showarrow=False, font=dict(color="red"))
+    fig.add_annotation(x=-2.3, y=1.8, text="Improving", showarrow=False, font=dict(color="blue"))
 
     return fig
 
 
-# ------------------------------------------------------------
-# Streamlit UI
-# ------------------------------------------------------------
+# ---------- Streamlit app ---------- #
 
 def main():
-    st.set_page_config(
-        page_title="RRG Dashboard",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
+    st.set_page_config(page_title="Relative Rotation Graph (RRG)", layout="wide")
 
-    st.title("Relative Rotation Graph (RRG)")
-    st.caption(
-        "Track sector, theme, commodity, and country rotation vs a benchmark. "
-        "Rough approximation of JdK RS-Ratio and RS-Momentum using weekly data."
-    )
-
-    universes, default_benchmarks = get_universes()
-
-    # ---- Sidebar controls ----
     st.sidebar.header("RRG Settings")
 
-    universe_name = st.sidebar.selectbox("Universe", list(universes.keys()))
+    # Universe selection
+    universe_name = st.sidebar.selectbox("Universe", list(UNIVERSES.keys()))
+    universe = UNIVERSES[universe_name]
 
-    universe_map = universes[universe_name]
-    labels = list(universe_map.keys())
-    tickers = list(universe_map.values())
+    # Benchmark
+    all_tickers_in_uni = list(universe.values())
+    default_bench = DEFAULT_BENCHMARK if DEFAULT_BENCHMARK in all_tickers_in_uni else DEFAULT_BENCHMARK
+    benchmark = st.sidebar.text_input("Benchmark", value=default_bench).strip().upper()
 
-    default_bench = default_benchmarks[universe_name]
-    bench = st.sidebar.text_input("Benchmark", value=default_bench)
-
-    selected_labels = st.sidebar.multiselect(
+    # ETF multiselect with free-form additions
+    default_selection = list(universe.keys())
+    chosen_labels = st.sidebar.multiselect(
         "Choose ETFs",
-        labels,
-        default=labels,
-        help="You can deselect items here if you want a smaller universe.",
+        options=list(universe.keys()),
+        default=default_selection,
+        help="You can add extra tickers below.",
     )
 
-    if not selected_labels:
-        st.warning("Please select at least one ETF.")
-        return
+    extra_tickers_str = st.sidebar.text_input(
+        "Extra tickers (comma-separated, e.g. 'QQQ, IWM, IHI')",
+        value="",
+    )
+    extra_tickers = [t.strip().upper() for t in extra_tickers_str.split(",") if t.strip()]
 
-    selected_symbols = [universe_map[l] for l in selected_labels]
-    label_map = {universe_map[l]: l for l in selected_labels}
+    # Build ticker list & label map
+    tickers = []
+    label_map = {}
+    for label in chosen_labels:
+        sym = universe[label]
+        tickers.append(sym)
+        label_map[sym] = label
 
+    for sym in extra_tickers:
+        if sym and sym not in tickers:
+            tickers.append(sym)
+            label_map.setdefault(sym, sym)
+
+    if benchmark not in tickers:
+        tickers.append(benchmark)
+        label_map.setdefault(benchmark, benchmark + " (benchmark)")
+
+    # Sliders
+    st.sidebar.markdown("---")
     history_years = st.sidebar.slider(
         "History (years, daily data)",
         min_value=1,
-        max_value=5,
-        value=1,
+        max_value=10,
+        value=3,
         step=1,
-        help="How many years of daily data to download before resampling to weekly.",
+        help="Minimum number of years to download; app will auto-extend if math needs more data.",
     )
-
-    lookback_weeks = st.sidebar.slider(
+    lookback_wk = st.sidebar.slider(
         "Lookback window (weeks)",
-        min_value=26,
+        min_value=8,
         max_value=104,
         value=52,
         step=1,
-        help="Longer = smoother RS-Ratio.",
+        help="Lookback used for RS-Ratio calculation.",
     )
-
-    momentum_weeks = st.sidebar.slider(
+    mom_wk = st.sidebar.slider(
         "Momentum period (weeks)",
         min_value=4,
         max_value=26,
         value=13,
         step=1,
-        help="Change in RS-Ratio over this window.",
+        help="Window used to smooth RS-Momentum.",
     )
-
     tail_len = st.sidebar.slider(
         "Tail length (weeks)",
         min_value=4,
         max_value=26,
         value=13,
         step=1,
-        help="How many weeks to plot in each tail.",
+        help="How many weekly points to show in each tail.",
     )
 
-    # ---- Download data ----
-    end = datetime.today()
-    start = end - relativedelta(years=history_years)
-
-    all_symbols = sorted(set(selected_symbols + [bench]))
-
-    with st.spinner("Downloading price data from Yahoo Finance..."):
-        prices_d = download_prices(all_symbols, start, end)
-
-    if prices_d is None or len(prices_d) == 0:
-        st.error("No data returned from Yahoo Finance. Please check tickers.")
-        return
-
-    # Ensure DataFrame
-    if isinstance(prices_d, pd.Series):
-        prices_d = prices_d.to_frame()
-
-    prices_d = prices_d.dropna(how="all")
-
-    # Weekly resample (Friday close)
-    prices_w = prices_d.resample("W-FRI").last().dropna(how="all")
-
-    if bench not in prices_w.columns:
-        st.error(f"Benchmark {bench} has no data for the selected period.")
-        return
-
-    # ---- Build RRG data ----
-    rrg_dict, snapshot_df, skipped = build_rrg_data(
-        prices_w, selected_symbols, bench, lookback_weeks, momentum_weeks, tail_len
+    st.title("Relative Rotation Graph (RRG)")
+    st.caption(
+        "Track sector, theme, commodity, and country rotation vs a benchmark. "
+        "Approximation of JdK RS-Ratio and RS-Momentum using weekly data."
     )
 
-    # History warnings
-    if skipped:
-        skipped_msg = ", ".join(
-            f"{sym} (have {have} wk, need ≥ {need})" for sym, have, need in skipped
-        )
-        st.sidebar.warning(
-            "Some symbols were dropped due to insufficient history:\n\n" + skipped_msg
+    if len(tickers) == 0:
+        st.warning("Please select at least one ETF.")
+        return
+
+    # Determine how much history we REALLY need
+    needed_years = compute_needed_years(lookback_wk, mom_wk, tail_len)
+    years_to_fetch = max(history_years, needed_years)
+
+    if years_to_fetch > history_years:
+        st.info(
+            f"Based on lookback ({lookback_wk}w), momentum ({mom_wk}w), and tail ({tail_len}w), "
+            f"the app automatically extended history from {history_years} to {years_to_fetch} years."
         )
 
-    if not rrg_dict:
+    # Download & resample
+    try:
+        daily = download_daily(tickers, years_to_fetch)
+    except Exception as e:
+        st.error(f"Error downloading data from Yahoo Finance: {e}")
+        return
+
+    if daily.empty:
+        st.error("No price data returned. Try different tickers or a shorter history window.")
+        return
+
+    weekly = resample_weekly(daily)
+
+    if benchmark not in weekly.columns:
+        st.error(f"Benchmark {benchmark} is missing from the downloaded data.")
+        return
+
+    # Compute RRG series
+    rs_z, mom_z, dropped = make_rrg_series(weekly, benchmark, lookback_wk, mom_wk)
+
+    if rs_z.empty or mom_z.empty:
         st.warning(
-            "Not enough data to build RRG (try a shorter lookback / momentum window "
-            "or remove very new ETFs)."
+            "Not enough data to build RRG (try a shorter lookback / momentum window or remove very new ETFs)."
         )
+        if dropped:
+            with st.expander("Details: symbols dropped due to insufficient history"):
+                for sym, (have, need) in dropped.items():
+                    st.write(f"{sym}: have {have} weekly points after calculations, need ≥ {need}.")
         return
 
-    # ---- Main chart ----
-    fig = make_rrg_figure(rrg_dict, label_map)
+    # Build figure
+    fig = build_rrg_figure(rs_z, mom_z, label_map, tail_len)
     st.plotly_chart(fig, use_container_width=True)
 
-    # ---- Snapshot & summary ----
-    st.subheader("Latest RRG Snapshot")
-
-    sort_choice = st.radio(
-        "Sort summary by:",
-        options=("RS-Ratio", "RS-Momentum"),
-        horizontal=True,
-    )
-
-    if snapshot_df is not None and not snapshot_df.empty:
-        # Map back to labels for readability
-        snapshot_df = snapshot_df.copy()
-        snapshot_df["Name"] = snapshot_df["Symbol"].map(label_map)
-
-        sort_col = sort_choice
-
-        leading = (
-            snapshot_df[snapshot_df["Quadrant"] == "Leading"]
-            .sort_values(sort_col, ascending=False)
-            .head(5)
-        )
-        improving = (
-            snapshot_df[snapshot_df["Quadrant"] == "Improving"]
-            .sort_values(sort_col, ascending=False)
-            .head(3)
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**Leading quadrant (top 5)**")
-            if leading.empty:
-                st.write("None currently in Leading.")
-            else:
-                st.table(
-                    leading[["Name", "Symbol", "RS-Ratio", "RS-Momentum"]].reset_index(
-                        drop=True
-                    )
-                )
-
-        with col2:
-            st.markdown("**Top 3 Improving (moving toward Leading)**")
-            if improving.empty:
-                st.write("None currently in Improving.")
-            else:
-                st.table(
-                    improving[
-                        ["Name", "Symbol", "RS-Ratio", "RS-Momentum"]
-                    ].reset_index(drop=True)
-                )
+    # Show info about dropped symbols, if any
+    if dropped:
+        st.warning("Some symbols were dropped from the RRG due to insufficient history.")
+        with st.expander("Symbols dropped"):
+            for sym, (have, need) in dropped.items():
+                st.write(f"{sym}: have {have} weekly points after calculations, need ≥ {need}.")
 
 
 if __name__ == "__main__":
