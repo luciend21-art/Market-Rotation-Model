@@ -74,7 +74,6 @@ UNIVERSES = {
         "Silver (SLV)": "SLV",
         "Silver 2 (SIL)": "SIL",
         "Copper (CPER)": "CPER",
-        "Oil (USO)": "USO",
         "Bitcoin (BITO)": "BITO",
         "Ethereum (ETHA)": "ETHA",
         "Solana (BSOL)": "BSOL",
@@ -111,6 +110,7 @@ def compute_needed_years(lookback_wk: int, mom_wk: int, tail_wk: int) -> int:
 def download_daily(tickers, years: int) -> pd.DataFrame:
     end = datetime.today()
     start = end - timedelta(days=years * 365)
+
     data = yf.download(
         tickers=list(tickers),
         start=start,
@@ -121,14 +121,44 @@ def download_daily(tickers, years: int) -> pd.DataFrame:
         group_by="ticker",
         threads=True,
     )
-    # yfinance returns a multi-index when multiple tickers are requested
-    if isinstance(data.columns, pd.MultiIndex):
-        close = data["Close"].copy()
-        close.columns = close.columns.astype(str)
-    else:
-        close = data["Close"].to_frame()
-    return close
 
+    if data.empty:
+        raise Exception(f"No price data returned for tickers: {tickers}")
+
+    # Multi-ticker result -> MultiIndex columns
+    if isinstance(data.columns, pd.MultiIndex):
+        level0 = data.columns.get_level_values(0)
+        if "Close" in level0:
+            close = data["Close"]
+        elif "Adj Close" in level0:
+            close = data["Adj Close"]
+        else:
+            raise Exception(
+                f"Expected 'Close' or 'Adj Close' columns, got {sorted(set(level0))}"
+            )
+        close.columns = close.columns.astype(str)
+
+    # Single-ticker result -> normal columns
+    else:
+        if "Close" in data.columns:
+            close = data["Close"].to_frame()
+        elif "Adj Close" in data.columns:
+            close = data["Adj Close"].to_frame()
+        else:
+            raise Exception(
+                f"Expected 'Close' or 'Adj Close' columns, got {list(data.columns)}"
+            )
+
+    # Drop tickers with no usable data at all
+    close = close.dropna(axis=1, how="all")
+
+    if close.empty:
+        raise Exception(
+            f"No usable 'Close' prices for tickers: {tickers} "
+            "(they may be delisted or lack any history)."
+        )
+
+    return close
 
 def resample_weekly(close_df: pd.DataFrame) -> pd.DataFrame:
     """Resample daily closes to weekly (Friday) closes."""
