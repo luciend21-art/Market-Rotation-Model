@@ -5,6 +5,7 @@ import numpy as np
 
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import plotly.express as px
 
 
 # ------------------------------------------------------------
@@ -286,9 +287,13 @@ def compute_rrg(
 # ------------------------------------------------------------
 
 def make_rrg_figure(rrg_tails, display_names):
-    """Build Plotly RRG figure from tails dict."""
+    """Build Plotly RRG figure from tails dict, highlighting the latest point."""
+
     if not rrg_tails:
         raise ValueError("No symbols with valid RRG data.")
+
+    # Color palette so tail + head use the same color
+    palette = px.colors.qualitative.Plotly
 
     # Collect all points to determine ranges
     all_x = np.concatenate([v["x_series"].values for v in rrg_tails.values()])
@@ -313,7 +318,7 @@ def make_rrg_figure(rrg_tails, display_names):
 
     fig = go.Figure()
 
-    # Quadrant shading
+    # ---- Quadrant shading ----
     fig.add_shape(
         type="rect",
         x0=0,
@@ -406,22 +411,50 @@ def make_rrg_figure(rrg_tails, display_names):
         font=dict(color="orange", size=12),
     )
 
-    # Tails
-    for sym, tail in rrg_tails.items():
+    # ---- Tails + highlighted heads ----
+    for idx, (sym, tail) in enumerate(rrg_tails.items()):
         x = tail["x_series"]
         y = tail["y_series"]
         name = display_names.get(sym, sym)
+        color = palette[idx % len(palette)]
 
+        # Tail: all but last point (small markers + line, no legend)
+        if len(x) > 1:
+            fig.add_trace(
+                go.Scatter(
+                    x=x.iloc[:-1],
+                    y=y.iloc[:-1],
+                    mode="lines+markers",
+                    name=name,
+                    legendgroup=sym,
+                    showlegend=False,  # legend only for the head
+                    line=dict(width=1.5, color=color),
+                    marker=dict(size=4, color=color),
+                    hovertemplate=(
+                        f"{name}<br>"
+                        "RS-Ratio: %{x:.2f}<br>"
+                        "RS-Momentum: %{y:.2f}<extra></extra>"
+                    ),
+                )
+            )
+
+        # Head: most recent point (big marker with black outline, shows in legend)
         fig.add_trace(
             go.Scatter(
-                x=x,
-                y=y,
-                mode="lines+markers",
+                x=[x.iloc[-1]],
+                y=[y.iloc[-1]],
+                mode="markers",
                 name=name,
-                marker=dict(size=5),
-                line=dict(width=1.5),
+                legendgroup=sym,
+                showlegend=True,
+                marker=dict(
+                    size=10,
+                    color=color,
+                    line=dict(width=2, color="black"),
+                    symbol="circle",
+                ),
                 hovertemplate=(
-                    f"{name}<br>"
+                    f"{name} (latest)<br>"
                     "RS-Ratio: %{x:.2f}<br>"
                     "RS-Momentum: %{y:.2f}<extra></extra>"
                 ),
@@ -434,7 +467,7 @@ def make_rrg_figure(rrg_tails, display_names):
         xaxis=dict(range=[x_min, x_max], zeroline=False),
         yaxis=dict(range=[y_min, y_max], zeroline=False),
         legend=dict(
-            title="Tails (most recent point highlighted)",
+            title="Most recent point (large marker)",
             orientation="v",
             yanchor="top",
             y=1,
