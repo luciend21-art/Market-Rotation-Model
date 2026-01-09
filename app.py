@@ -422,21 +422,22 @@ def make_rrg_figure(rrg_tails: dict, display_names: dict) -> go.Figure:
         name = display_names.get(sym, sym)
         color = palette[idx % len(palette)]
 
-        # Tail (all but last)
-        if len(x) > 1:
-            fig.add_trace(
-                go.Scatter(
-                    x=x.iloc[:-1],
-                    y=y.iloc[:-1],
-                    mode="lines+markers",
-                    name=name,
-                    legendgroup=sym,
-                    showlegend=False,
-                    line=dict(width=1.5, color=color),
-                    marker=dict(size=4, color=color),
-                    hovertemplate=f"{name}<br>RS-Ratio: %{{x:.2f}}<br>RS-Momentum: %{{y:.2f}}<extra></extra>",
-                )
-            )
+  # Tail (entire path, so it always reaches the head)
+fig.add_trace(
+    go.Scatter(
+        x=x,
+        y=y,
+        mode="lines+markers",
+        name=name,
+        legendgroup=sym,
+        showlegend=False,
+        line=dict(width=1.5, color=color),
+        marker=dict(size=4, color=color),
+        connectgaps=True,  # <-- ensures the line doesn't break if a gap sneaks in
+        hovertemplate=f"{name}<br>RS-Ratio: %{{x:.2f}}<br>RS-Momentum: %{{y:.2f}}<extra></extra>",
+    )
+)
+
 
         # Head (last point) - make it very obvious
         fig.add_trace(
