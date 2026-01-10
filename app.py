@@ -1,18 +1,17 @@
 # app.py
 # Streamlit Relative Rotation Graph (RRG) dashboard
-# - Universes: SPDR Sectors, Themes, Commodities, Countries
-# - Extra tickers via UI
-# - Daily vs Weekly toggle (Daily=1y history, Weekly=3y history)
-# - Tail + clearly visible HEAD marker (diamond w/ black outline)
-# - Summary tables: Top 3 Leading + Top 3 Improving
-# - Interpreted columns: RS-Ratio state, Momentum state, Direction arrow, Rotation Speed bucket (percentile-based)
-# - Robust Yahoo Finance download handling (Close vs Adj Close, single vs multi-ticker)
+# Fixes added:
+# 1) Auto-zoom / expand axes so points outside the default [-3,3] range remain visible
+#    - Dynamic axis bounds computed from all tail points + head points
+#    - Padding applied, with an optional "Auto-zoom" toggle and manual padding slider
+# 2) Adds back the “dropdown box” (expander) that shows a full snapshot table:
+#    Symbol | Description | RS-Ratio | Momentum | Direction | Rotation Speed | Quadrant
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -118,7 +117,7 @@ DEFAULT_BENCHMARKS = ["SPY", "QQQ", "IWM", "DIA"]
 
 
 # ----------------------------
-# Helper: Yahoo Finance download
+# Yahoo Finance download (robust)
 # ----------------------------
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
@@ -128,10 +127,11 @@ def download_prices(
     end: date,
 ) -> pd.DataFrame:
     """
-    Returns a DataFrame indexed by date with one column per ticker (Close preferred, fallback Adj Close).
+    Returns DataFrame indexed by date with one column per ticker.
+    Prefers Close; falls back to Adj Close.
     Handles:
-      - single ticker (columns like ['Open','High',...])
-      - multi-ticker (MultiIndex columns)
+      - single ticker => flat columns
+      - multi-ticker => MultiIndex columns
     """
     if not tickers:
         return pd.DataFrame()
@@ -142,50 +142,44 @@ def download_prices(
         end=end,
         progress=False,
         group_by="column",
-        auto_adjust=False,  # we explicitly choose Close vs Adj Close
+        auto_adjust=False,
         threads=True,
     )
 
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Multi-ticker => MultiIndex columns
     if isinstance(df.columns, pd.MultiIndex):
-        # Prefer Close, fallback Adj Close
-        if ("Close" in df.columns.get_level_values(0)):
+        lvl0 = df.columns.get_level_values(0)
+        if "Close" in set(lvl0):
             close = df["Close"].copy()
-        elif ("Adj Close" in df.columns.get_level_values(0)):
+        elif "Adj Close" in set(lvl0):
             close = df["Adj Close"].copy()
         else:
-            # Return empty w/ explicit error upstream
             return pd.DataFrame()
 
-        # Ensure all requested tickers exist as columns
         close = close.reindex(columns=list(tickers))
         close.index = pd.to_datetime(close.index)
-        close = close.sort_index()
-        return close
+        return close.sort_index()
 
-    # Single ticker => flat columns
-    cols = [c for c in df.columns]
+    # single ticker
+    cols = list(df.columns)
+    t0 = tickers[0]
     if "Close" in cols:
-        close = df[["Close"]].rename(columns={"Close": tickers[0]}).copy()
+        close = df[["Close"]].rename(columns={"Close": t0}).copy()
     elif "Adj Close" in cols:
-        close = df[["Adj Close"]].rename(columns={"Adj Close": tickers[0]}).copy()
+        close = df[["Adj Close"]].rename(columns={"Adj Close": t0}).copy()
     else:
         return pd.DataFrame()
 
     close.index = pd.to_datetime(close.index)
-    close = close.sort_index()
-    return close
+    return close.sort_index()
 
 
 def to_weekly(prices: pd.DataFrame) -> pd.DataFrame:
-    """Weekly (Friday) close. Works for multi-column price panels."""
     if prices.empty:
         return prices
-    w = prices.resample("W-FRI").last()
-    return w.dropna(how="all")
+    return prices.resample("W-FRI").last().dropna(how="all")
 
 
 # ----------------------------
@@ -205,16 +199,11 @@ def compute_rrg_series(
     momentum: int,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Build standardized RS-Ratio and RS-Momentum series for each asset.
-    A pragmatic proxy:
+    Proxy approximation of JdK RS-Ratio / RS-Momentum:
       RS = asset / benchmark
       RS-Ratio = zscore(rolling mean of RS over lookback)
-      RS-Momentum = zscore(change in RS-Ratio over momentum)
-    Returns:
-      rs_ratio_z (index aligned)
-      rs_mom_z (index aligned)
+      RS-Momentum = zscore(diff(RS-Ratio, momentum))
     """
-    # Align
     df = asset_prices.join(bench_prices.rename("BENCH"), how="inner")
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -223,26 +212,19 @@ def compute_rrg_series(
     assets = df.drop(columns=["BENCH"])
 
     rs = assets.divide(bench, axis=0)
-
-    # Smooth RS with lookback
     rs_smooth = rs.rolling(lookback, min_periods=max(10, lookback // 3)).mean()
 
-    # Standardize per asset using rolling stats (52 periods baseline)
     rs_ratio_z = rs_smooth.apply(_zscore)
-
-    # Momentum: change in RS-Ratio over momentum window, then zscore
-    rs_change = rs_ratio_z.diff(momentum)
-    rs_mom_z = rs_change.apply(_zscore)
+    rs_mom_z = rs_ratio_z.diff(momentum).apply(_zscore)
 
     return rs_ratio_z, rs_mom_z
 
 
 # ----------------------------
-# Interpretation layer
+# Interpretation
 # ----------------------------
 
 def state_from_value(v: float, flat_band: float = 0.25) -> str:
-    """Map a z-scored value to a readable state."""
     if pd.isna(v):
         return "N/A"
     if abs(v) <= flat_band:
@@ -263,26 +245,19 @@ def quadrant(rs: float, mom: float) -> str:
 
 
 def direction_arrow(dx: float, dy: float) -> str:
-    """
-    8-direction arrow by angle of last step in RS-Ratio/Momentum plane.
-    Uses Unicode arrows for portability.
-    """
     if pd.isna(dx) or pd.isna(dy) or (dx == 0 and dy == 0):
         return "•"
-
-    ang = math.degrees(math.atan2(dy, dx))  # -180..180, 0 = east
-    # Map to 8 bins, centered on: E, NE, N, NW, W, SW, S, SE
-    # boundaries every 45 degrees
+    ang = math.degrees(math.atan2(dy, dx))
     bins = [
-        ( -22.5,  22.5, "→"),
-        (  22.5,  67.5, "↗"),
-        (  67.5, 112.5, "↑"),
-        ( 112.5, 157.5, "↖"),
-        ( 157.5, 180.0, "←"),
-        (-180.0,-157.5, "←"),
-        (-157.5,-112.5, "↙"),
+        (-22.5, 22.5, "→"),
+        (22.5, 67.5, "↗"),
+        (67.5, 112.5, "↑"),
+        (112.5, 157.5, "↖"),
+        (157.5, 180.0, "←"),
+        (-180.0, -157.5, "←"),
+        (-157.5, -112.5, "↙"),
         (-112.5, -67.5, "↓"),
-        ( -67.5, -22.5, "↘"),
+        (-67.5, -22.5, "↘"),
     ]
     for lo, hi, a in bins:
         if lo <= ang < hi:
@@ -290,65 +265,104 @@ def direction_arrow(dx: float, dy: float) -> str:
     return "•"
 
 
-def speed_bucket(
-    speeds: pd.Series,
-    symbol_speed: float,
-) -> Tuple[str, float]:
-    """
-    4 buckets using percentiles across currently-selected symbols.
-    Returns (label, percentile).
-      0-25: Slow
-      25-60: Medium
-      60-85: Fast
-      85-100: Hot/Climactic
-    """
+def speed_bucket_label(speeds: pd.Series, symbol_speed: float) -> str:
     speeds = speeds.dropna()
     if speeds.empty or pd.isna(symbol_speed):
-        return "N/A", np.nan
-
-    pct = (speeds.rank(pct=True).loc[speeds.index].median())  # not used directly
-    # Use empirical percentile of symbol_speed vs distribution
+        return "N/A"
     pct = float((speeds < symbol_speed).mean())  # 0..1
-
     if pct < 0.25:
-        return "Slow", pct
+        return "Slow"
     if pct < 0.60:
-        return "Medium", pct
+        return "Medium"
     if pct < 0.85:
-        return "Fast", pct
-    return "Hot/Climactic", pct
+        return "Fast"
+    return "Hot/Climactic"
 
 
 # ----------------------------
-# Plot: RRG (with clearly-visible head)
+# Plot: RRG with dynamic axis bounds
 # ----------------------------
+
+def _compute_axis_bounds(
+    rs_ratio_z: pd.DataFrame,
+    rs_mom_z: pd.DataFrame,
+    tail_len: int,
+    pad_frac: float = 0.10,
+    min_span: float = 2.5,
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """
+    Computes x/y axis ranges from all tail points (including heads), plus padding.
+    Ensures a minimum span so chart does not over-zoom.
+    """
+    xs: List[float] = []
+    ys: List[float] = []
+
+    symbols = [c for c in rs_ratio_z.columns if c in rs_mom_z.columns]
+    for sym in symbols:
+        x = rs_ratio_z[sym].dropna()
+        y = rs_mom_z[sym].dropna()
+        idx = x.index.intersection(y.index)
+        if len(idx) < max(3, tail_len):
+            continue
+
+        tidx = idx[-tail_len:]
+        xt = rs_ratio_z.loc[tidx, sym].astype(float).values
+        yt = rs_mom_z.loc[tidx, sym].astype(float).values
+
+        xs.extend([v for v in xt if np.isfinite(v)])
+        ys.extend([v for v in yt if np.isfinite(v)])
+
+    if not xs or not ys:
+        return (-3.0, 3.0), (-3.0, 3.0)
+
+    xmin, xmax = float(np.min(xs)), float(np.max(xs))
+    ymin, ymax = float(np.min(ys)), float(np.max(ys))
+
+    # enforce min spans
+    xspan = max(xmax - xmin, min_span)
+    yspan = max(ymax - ymin, min_span)
+
+    xmid = (xmin + xmax) / 2.0
+    ymid = (ymin + ymax) / 2.0
+
+    # padded spans
+    xspan *= (1.0 + pad_frac)
+    yspan *= (1.0 + pad_frac)
+
+    return (xmid - xspan / 2.0, xmid + xspan / 2.0), (ymid - yspan / 2.0, ymid + yspan / 2.0)
+
 
 def make_rrg_figure(
     rs_ratio_z: pd.DataFrame,
     rs_mom_z: pd.DataFrame,
     tail_len: int,
     title: str,
+    auto_zoom: bool = True,
+    zoom_padding: float = 0.10,
 ) -> go.Figure:
     """
     Tail connects to head:
       - Tail trace includes ALL points including the most recent point
       - Head trace overlays a larger diamond marker on the most recent point
+    Axis bounds:
+      - If auto_zoom=True, ranges are computed from visible points with padding.
+      - Otherwise, uses a fixed symmetric range around 0.
     """
     fig = go.Figure()
 
     if rs_ratio_z.empty or rs_mom_z.empty:
-        fig.update_layout(
-            title=title,
-            height=520,
-            margin=dict(l=30, r=30, t=70, b=40),
-        )
+        fig.update_layout(title=title, height=520, margin=dict(l=30, r=30, t=70, b=40))
         return fig
 
-    # Quadrant shading (light)
-    # Use fixed symmetric bounds that fit most z-score situations.
-    x_min, x_max = -3.0, 3.0
-    y_min, y_max = -3.0, 3.0
+    if auto_zoom:
+        (x_min, x_max), (y_min, y_max) = _compute_axis_bounds(
+            rs_ratio_z, rs_mom_z, tail_len=tail_len, pad_frac=zoom_padding
+        )
+    else:
+        x_min, x_max = -3.0, 3.0
+        y_min, y_max = -3.0, 3.0
 
+    # Quadrant shading (light)
     fig.add_shape(type="rect", x0=x_min, y0=0, x1=0, y1=y_max,
                   fillcolor="rgba(120,150,255,0.08)", line_width=0, layer="below")
     fig.add_shape(type="rect", x0=0, y0=0, x1=x_max, y1=y_max,
@@ -358,22 +372,22 @@ def make_rrg_figure(
     fig.add_shape(type="rect", x0=0, y0=y_min, x1=x_max, y1=0,
                   fillcolor="rgba(255,210,120,0.08)", line_width=0, layer="below")
 
-    # Axes crosshairs
+    # Axes crosshairs at 0
     fig.add_shape(type="line", x0=x_min, y0=0, x1=x_max, y1=0,
                   line=dict(color="rgba(0,0,0,0.35)", width=1))
     fig.add_shape(type="line", x0=0, y0=y_min, x1=0, y1=y_max,
                   line=dict(color="rgba(0,0,0,0.35)", width=1))
 
     # Quadrant labels (corners)
-    fig.add_annotation(x=x_min + 0.2, y=y_max - 0.2, text="Improving",
-                       showarrow=False, font=dict(size=12, color="blue"))
-    fig.add_annotation(x=x_max - 0.2, y=y_max - 0.2, text="Leading",
-                       showarrow=False, xanchor="right",
+    fig.add_annotation(x=x_min + 0.03 * (x_max - x_min), y=y_max - 0.05 * (y_max - y_min),
+                       text="Improving", showarrow=False, font=dict(size=12, color="blue"))
+    fig.add_annotation(x=x_max - 0.03 * (x_max - x_min), y=y_max - 0.05 * (y_max - y_min),
+                       text="Leading", showarrow=False, xanchor="right",
                        font=dict(size=12, color="green"))
-    fig.add_annotation(x=x_min + 0.2, y=y_min + 0.2, text="Lagging",
-                       showarrow=False, font=dict(size=12, color="red"))
-    fig.add_annotation(x=x_max - 0.2, y=y_min + 0.2, text="Weakening",
-                       showarrow=False, xanchor="right",
+    fig.add_annotation(x=x_min + 0.03 * (x_max - x_min), y=y_min + 0.05 * (y_max - y_min),
+                       text="Lagging", showarrow=False, font=dict(size=12, color="red"))
+    fig.add_annotation(x=x_max - 0.03 * (x_max - x_min), y=y_min + 0.05 * (y_max - y_min),
+                       text="Weakening", showarrow=False, xanchor="right",
                        font=dict(size=12, color="orange"))
 
     # Plot each symbol
@@ -389,7 +403,7 @@ def make_rrg_figure(
         xt = rs_ratio_z.loc[tail_idx, sym]
         yt = rs_mom_z.loc[tail_idx, sym]
 
-        # Tail trace (connected line + small markers)
+        # Tail trace (connected)
         fig.add_trace(
             go.Scatter(
                 x=xt,
@@ -408,7 +422,7 @@ def make_rrg_figure(
             )
         )
 
-        # Head marker (most recent point) - large diamond with black outline
+        # HEAD marker (latest) - large diamond w/ black outline
         xh = float(xt.iloc[-1])
         yh = float(yt.iloc[-1])
         fig.add_trace(
@@ -417,11 +431,7 @@ def make_rrg_figure(
                 y=[yh],
                 mode="markers",
                 name=f"{sym} (latest)",
-                marker=dict(
-                    size=14,
-                    symbol="diamond",
-                    line=dict(width=2, color="black"),
-                ),
+                marker=dict(size=14, symbol="diamond", line=dict(width=2, color="black")),
                 hovertemplate=(
                     f"<b>{sym} (latest)</b><br>"
                     "RS-Ratio(z): %{x:.2f}<br>"
@@ -438,7 +448,6 @@ def make_rrg_figure(
         margin=dict(l=30, r=30, t=70, b=40),
         xaxis=dict(title="RS-Ratio (standardized)", range=[x_min, x_max], zeroline=False),
         yaxis=dict(title="RS-Momentum (standardized)", range=[y_min, y_max], zeroline=False),
-        legend=dict(title="Most recent point"),
     )
     return fig
 
@@ -456,37 +465,34 @@ class RRGRow:
     arrow: str
     speed_label: str
     quad: str
+    rs_val: float
+    mom_val: float
 
 
-def build_summary_tables(
+def build_snapshot_table(
     rs_ratio_z: pd.DataFrame,
     rs_mom_z: pd.DataFrame,
     descriptions: Dict[str, str],
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     """
-    Returns (top_leading_df, top_improving_df) with interpreted columns only.
+    Full snapshot for all valid symbols. Includes interpreted columns and quadrant.
     """
     symbols = [c for c in rs_ratio_z.columns if c in rs_mom_z.columns]
-    if not symbols:
-        return pd.DataFrame(), pd.DataFrame()
+    rows: List[RRGRow] = []
 
-    latest_rows: List[RRGRow] = []
-
-    # compute last-step speeds for percentile bucketing
-    speeds = {}
+    # speed distribution across selected symbols (last-step speed)
+    spds = {}
     for sym in symbols:
         s1 = rs_ratio_z[sym].dropna()
         s2 = rs_mom_z[sym].dropna()
         idx = s1.index.intersection(s2.index)
         if len(idx) < 3:
             continue
-        # last step vector
         x_last, y_last = float(s1.loc[idx[-1]]), float(s2.loc[idx[-1]])
         x_prev, y_prev = float(s1.loc[idx[-2]]), float(s2.loc[idx[-2]])
-        spd = math.sqrt((x_last - x_prev) ** 2 + (y_last - y_prev) ** 2)
-        speeds[sym] = spd
+        spds[sym] = math.sqrt((x_last - x_prev) ** 2 + (y_last - y_prev) ** 2)
 
-    speeds_s = pd.Series(speeds, dtype="float64")
+    spds_s = pd.Series(spds, dtype="float64")
 
     for sym in symbols:
         s1 = rs_ratio_z[sym].dropna()
@@ -503,12 +509,10 @@ def build_summary_tables(
         mom_state = state_from_value(y_last, flat_band=0.25)
         arr = direction_arrow(dx, dy)
 
-        spd = speeds.get(sym, np.nan)
-        spd_label, _pct = speed_bucket(speeds_s, spd)
-
+        spd_label = speed_bucket_label(spds_s, spds.get(sym, np.nan))
         q = quadrant(x_last, y_last)
 
-        latest_rows.append(
+        rows.append(
             RRGRow(
                 symbol=sym,
                 description=descriptions.get(sym, sym),
@@ -517,11 +521,13 @@ def build_summary_tables(
                 arrow=arr,
                 speed_label=spd_label,
                 quad=q,
+                rs_val=x_last,
+                mom_val=y_last,
             )
         )
 
-    if not latest_rows:
-        return pd.DataFrame(), pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
 
     df = pd.DataFrame(
         [{
@@ -532,25 +538,32 @@ def build_summary_tables(
             "Direction": r.arrow,
             "Rotation Speed": r.speed_label,
             "Quadrant": r.quad,
-        } for r in latest_rows]
+            "_RS": r.rs_val,
+            "_MOM": r.mom_val,
+        } for r in rows]
     )
 
-    # Top 3 Leading + Improving
-    leading = df[df["Quadrant"] == "Leading"].copy()
-    improving = df[df["Quadrant"] == "Improving"].copy()
+    # Sort: quadrant priority then RS then MOM
+    quad_order = {"Leading": 0, "Improving": 1, "Weakening": 2, "Lagging": 3, "Unknown": 4}
+    df["_QO"] = df["Quadrant"].map(quad_order).fillna(9)
+    df = df.sort_values(["_QO", "_RS", "_MOM"], ascending=[True, False, False])
 
-    # Ranking: keep it intuitive
-    # Leading: prioritize RS-Ratio then Momentum as tie-break by mapping states to scores
-    score_map = {"Weakening": -1, "Flat": 0, "Improving": 1, "N/A": -99}
-    leading["Score"] = leading["RS-Ratio"].map(score_map).fillna(0) + 0.5 * leading["Momentum"].map(score_map).fillna(0)
-    improving["Score"] = improving["Momentum"].map(score_map).fillna(0) + 0.5 * improving["RS-Ratio"].map(score_map).fillna(0)
+    return df.drop(columns=["_QO"])
 
-    top_leading = leading.sort_values(["Score", "Symbol"], ascending=[False, True]).head(3).drop(columns=["Score"], errors="ignore")
-    top_improving = improving.sort_values(["Score", "Symbol"], ascending=[False, True]).head(3).drop(columns=["Score"], errors="ignore")
 
-    # Keep only what you wanted to read quickly (like your mock)
+def top3_tables(snapshot: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     cols = ["Symbol", "Description", "RS-Ratio", "Momentum", "Direction", "Rotation Speed"]
-    return top_leading[cols].reset_index(drop=True), top_improving[cols].reset_index(drop=True)
+    if snapshot.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    leading = snapshot[snapshot["Quadrant"] == "Leading"].copy()
+    improving = snapshot[snapshot["Quadrant"] == "Improving"].copy()
+
+    # Use numeric under-the-hood values to rank
+    leading = leading.sort_values(["_RS", "_MOM"], ascending=[False, False]).head(3)
+    improving = improving.sort_values(["_MOM", "_RS"], ascending=[False, False]).head(3)
+
+    return leading[cols].reset_index(drop=True), improving[cols].reset_index(drop=True)
 
 
 # ----------------------------
@@ -561,9 +574,11 @@ def main() -> None:
     st.set_page_config(page_title="Relative Rotation Graph (RRG)", layout="wide")
 
     st.title("Relative Rotation Graph (RRG)")
-    st.caption("Track sector, theme, commodity, and country rotation vs a benchmark. Approximation of JdK RS-Ratio and RS-Momentum.")
+    st.caption(
+        "Track sector, theme, commodity, and country rotation vs a benchmark. "
+        "Approximation of JdK RS-Ratio and RS-Momentum."
+    )
 
-    # Sidebar controls
     st.sidebar.header("RRG Settings")
 
     universe_name = st.sidebar.selectbox("Universe", list(UNIVERSES.keys()), index=0)
@@ -571,17 +586,18 @@ def main() -> None:
 
     benchmark = st.sidebar.selectbox("Benchmark", DEFAULT_BENCHMARKS, index=0)
 
-    # Daily vs Weekly toggle affects both:
-    # - sampling (daily series vs weekly resample)
-    # - default history: Daily=1y, Weekly=3y
     timeframe = st.sidebar.radio("Timeframe", ["Daily", "Weekly"], index=1)
     default_hist_years = 1 if timeframe == "Daily" else 3
+    history_years = st.sidebar.slider("History (years, daily data)", 1, 5, default_hist_years)
 
-    history_years = st.sidebar.slider("History (years, daily data)", min_value=1, max_value=5, value=default_hist_years)
+    lookback_weeks = st.sidebar.slider("Lookback window (weeks)", 12, 104, 52, 1)
+    momentum_weeks = st.sidebar.slider("Momentum period (weeks)", 4, 52, 13, 1)
+    tail_len_weeks = st.sidebar.slider("Tail length (weeks)", 4, 52, 13, 1)
 
-    lookback_weeks = st.sidebar.slider("Lookback window (weeks)", min_value=12, max_value=104, value=52, step=1)
-    momentum_weeks = st.sidebar.slider("Momentum period (weeks)", min_value=4, max_value=52, value=13, step=1)
-    tail_len = st.sidebar.slider("Tail length (weeks)", min_value=4, max_value=52, value=13, step=1)
+    # Auto-zoom settings
+    st.sidebar.subheader("Chart zoom")
+    auto_zoom = st.sidebar.checkbox("Auto-zoom to fit points", value=True)
+    zoom_padding = st.sidebar.slider("Zoom padding", 0.05, 0.35, 0.10, 0.01)
 
     # Choose from predefined list
     default_choices = list(universe_map.keys())[: min(12, len(universe_map))]
@@ -590,8 +606,9 @@ def main() -> None:
 
     extra = st.sidebar.text_input("Extra tickers (comma-separated, e.g. 'QQQ, IWM, IHI')", value="")
     extra_tickers = [t.strip().upper() for t in extra.split(",") if t.strip()]
-    # Merge unique
-    tickers = []
+
+    # Merge unique tickers
+    tickers: List[str] = []
     seen = set()
     for t in chosen_tickers + extra_tickers:
         if t and t not in seen:
@@ -602,7 +619,7 @@ def main() -> None:
         st.warning("Select at least one ETF/ticker.")
         return
 
-    # Build descriptions dictionary (ticker -> friendly label)
+    # Descriptions mapping ticker -> label
     descriptions = {v: k for k, v in universe_map.items()}
     for t in extra_tickers:
         descriptions.setdefault(t, t)
@@ -619,37 +636,37 @@ def main() -> None:
         st.error("No data returned from Yahoo Finance for the selected tickers.")
         return
 
-    # Ensure we have benchmark
     if benchmark not in prices.columns:
         st.error(f"Benchmark '{benchmark}' data missing. Try a different benchmark.")
         return
 
-    # Drop columns that are entirely missing
-    valid_cols = [c for c in prices.columns if prices[c].notna().sum() > 0]
-    prices = prices[valid_cols].copy()
+    # Remove dead columns
+    prices = prices[[c for c in prices.columns if prices[c].notna().sum() > 0]].copy()
 
-    # Data health: filter symbols w/ minimum points required
+    # Timeframe transforms + required points
     if timeframe == "Weekly":
         panel = to_weekly(prices)
-        # windows expressed in weeks directly
         lookback = lookback_weeks
         momentum = momentum_weeks
-        required_points = lookback_weeks + momentum_weeks + tail_len + 10
+        tail_points = tail_len_weeks
+        required_points = lookback_weeks + momentum_weeks + tail_len_weeks + 10
+        chart_title = f"{universe_name} vs {benchmark} (Weekly)"
     else:
         panel = prices.dropna(how="all").copy()
-        # convert weeks to trading days
         lookback = int(lookback_weeks * 5)
         momentum = int(momentum_weeks * 5)
-        required_points = int((lookback_weeks + momentum_weeks + tail_len) * 5 + 30)
+        tail_points = int(tail_len_weeks * 5)
+        required_points = int((lookback_weeks + momentum_weeks + tail_len_weeks) * 5 + 30)
+        chart_title = f"{universe_name} vs {benchmark} (Daily)"
 
-    # Split benchmark + assets
     bench_s = panel[benchmark].dropna()
+
     asset_cols = [t for t in tickers if t in panel.columns and t != benchmark]
 
     dropped: List[str] = []
     kept: List[str] = []
     for t in asset_cols:
-        n = panel[t].dropna().shape[0]
+        n = int(panel[t].dropna().shape[0])
         if n < required_points:
             dropped.append(f"{t} (have {n} pts, need ≥ {required_points})")
         else:
@@ -659,7 +676,7 @@ def main() -> None:
         st.sidebar.warning("Some symbols were dropped due to insufficient history:\n\n" + "\n".join(dropped))
 
     if not kept:
-        st.warning("Not enough data to build RRG (try shorter lookback / momentum / tail, or increase history).")
+        st.warning("Not enough data to build RRG (try shorter lookback/momentum/tail or increase history).")
         return
 
     assets = panel[kept].dropna(how="all")
@@ -670,35 +687,27 @@ def main() -> None:
         st.warning("No overlapping data between benchmark and selected ETFs.")
         return
 
-    # Compute RRG series
-    rs_ratio_z, rs_mom_z = compute_rrg_series(
-        asset_prices=assets,
-        bench_prices=bench_s,
-        lookback=lookback,
-        momentum=momentum,
-    )
+    rs_ratio_z, rs_mom_z = compute_rrg_series(assets, bench_s, lookback=lookback, momentum=momentum)
 
-    # Tail length in points depends on timeframe
-    if timeframe == "Weekly":
-        tail_points = tail_len
-        title = f"{universe_name} vs {benchmark} (Weekly)"
-    else:
-        tail_points = int(tail_len * 5)
-        title = f"{universe_name} vs {benchmark} (Daily)"
-
-    # Build chart
     fig = make_rrg_figure(
         rs_ratio_z=rs_ratio_z,
         rs_mom_z=rs_mom_z,
         tail_len=tail_points,
-        title=title,
+        title=chart_title,
+        auto_zoom=auto_zoom,
+        zoom_padding=zoom_padding,
     )
 
-    # Layout: chart + legend
     st.plotly_chart(fig, use_container_width=True)
 
-    # Summary tables
-    top_leading, top_improving = build_summary_tables(rs_ratio_z, rs_mom_z, descriptions)
+    # Snapshot table (full universe selection)
+    snapshot = build_snapshot_table(rs_ratio_z, rs_mom_z, descriptions)
+    if snapshot.empty:
+        st.warning("Could not compute snapshot table (insufficient valid data after alignment).")
+        return
+
+    # Top 3 tables
+    top_leading, top_improving = top3_tables(snapshot)
 
     st.subheader("Latest RRG Snapshot (interpreted)")
     c1, c2 = st.columns(2)
@@ -716,7 +725,13 @@ def main() -> None:
         else:
             st.dataframe(top_improving, use_container_width=True, hide_index=True)
 
+    # “Dropdown box” (expander) with full table
+    st.markdown("---")
+    with st.expander("Universe Snapshot Table (all selected symbols)", expanded=False):
+        # Present a clean, readable table (no hidden numeric columns)
+        show_cols = ["Symbol", "Description", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "Quadrant"]
+        st.dataframe(snapshot[show_cols].reset_index(drop=True), use_container_width=True, hide_index=True)
+
 
 if __name__ == "__main__":
     main()
-
