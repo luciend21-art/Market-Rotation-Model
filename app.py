@@ -1,338 +1,364 @@
-import io
 import math
-from datetime import datetime, timedelta
+from io import BytesIO
+from typing import Dict, List, Tuple
 
+import altair as alt
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
 
-# =========================
-# App config
-# =========================
-st.set_page_config(page_title="Relative Rotation Graph (RRG)", layout="wide")
+# ----------------------------
+# Config
+# ----------------------------
+st.set_page_config(
+    page_title="Relative Rotation Graph (RRG)",
+    layout="wide",
+)
 
+# ----------------------------
+# Predefined universes (baseline)
+# ----------------------------
+def predefined_universes() -> Dict[str, pd.DataFrame]:
+    # Columns: Ticker, Name, Group
+    sectors = [
+        ("XLB", "Materials", "SPDR Sectors"),
+        ("XLC", "Communication Services", "SPDR Sectors"),
+        ("XLE", "Energy", "SPDR Sectors"),
+        ("XLF", "Financials", "SPDR Sectors"),
+        ("XLI", "Industrials", "SPDR Sectors"),
+        ("XLK", "Technology", "SPDR Sectors"),
+        ("XLP", "Consumer Staples", "SPDR Sectors"),
+        ("XLRE", "Real Estate", "SPDR Sectors"),
+        ("XLU", "Utilities", "SPDR Sectors"),
+        ("XLV", "Health Care", "SPDR Sectors"),
+        ("XLY", "Consumer Discretionary", "SPDR Sectors"),
+    ]
 
-# =========================
-# Predefined universes
-# =========================
-def predefined_universes() -> dict:
-    # Format: { universe_name: DataFrame(columns=["Group","Ticker","Name"]) }
-    sectors = pd.DataFrame(
-        [
-            ("SPDR Sectors", "XLB", "Materials"),
-            ("SPDR Sectors", "XLC", "Communication Services"),
-            ("SPDR Sectors", "XLE", "Energy"),
-            ("SPDR Sectors", "XLF", "Financials"),
-            ("SPDR Sectors", "XLI", "Industrials"),
-            ("SPDR Sectors", "XLK", "Technology"),
-            ("SPDR Sectors", "XLP", "Consumer Staples"),
-            ("SPDR Sectors", "XLRE", "Real Estate"),
-            ("SPDR Sectors", "XLU", "Utilities"),
-            ("SPDR Sectors", "XLV", "Health Care"),
-            ("SPDR Sectors", "XLY", "Consumer Discretionary"),
-        ],
-        columns=["Group", "Ticker", "Name"],
-    )
+    # You can keep these minimal because you’ll upload your own file over time
+    themes = [
+        ("SOXX", "Semiconductors", "Themes"),
+        ("SMH", "Semiconductors 2", "Themes"),
+        ("CIBR", "Cybersecurity", "Themes"),
+        ("HACK", "Cybersecurity 2", "Themes"),
+        ("CLOU", "Cloud", "Themes"),
+        ("SKYY", "Cloud 2", "Themes"),
+        ("IGV", "Software", "Themes"),
+        ("ITA", "Defense & Aerospace", "Themes"),
+        ("XAR", "Defense & Aerospace 2", "Themes"),
+        ("ICLN", "Clean Energy", "Themes"),
+        ("TAN", "Solar", "Themes"),
+        ("ARKF", "Fintech / Innovation", "Themes"),
+        ("PAVE", "Infrastructure", "Themes"),
+        ("ROBO", "Robotics", "Themes"),
+        ("BOTZ", "Robotics 2", "Themes"),
+        ("NLR", "Nuclear", "Themes"),
+        ("NUKZ", "Nuclear 2", "Themes"),
+        ("ARKG", "Biotech", "Themes"),
+        ("BIB", "Biotech 2", "Themes"),
+        ("PPH", "Pharmaceutical", "Themes"),
+        ("JETS", "Airlines", "Themes"),
+        ("REMX", "Rare Earth", "Themes"),
+        ("QTUM", "Quantum", "Themes"),
+        ("MSOS", "Cannabis", "Themes"),
+    ]
 
-    themes = pd.DataFrame(
-        [
-            ("Themes ETFs", "SOXX", "Semiconductors"),
-            ("Themes ETFs", "SMH", "Semiconductors 2"),
-            ("Themes ETFs", "CIBR", "Cybersecurity"),
-            ("Themes ETFs", "HACK", "Cybersecurity 2"),
-            ("Themes ETFs", "CLOU", "Cloud"),
-            ("Themes ETFs", "SKYY", "Cloud 2"),
-            ("Themes ETFs", "IGV", "Software"),
-            ("Themes ETFs", "ITA", "Defense & Aerospace"),
-            ("Themes ETFs", "XAR", "Defense & Aerospace 2"),
-            ("Themes ETFs", "EUAD", "European Defense"),
-            ("Themes ETFs", "ICLN", "Clean Energy"),
-            ("Themes ETFs", "TAN", "Solar"),
-            ("Themes ETFs", "ARKF", "Fintech / Innovation"),
-            ("Themes ETFs", "PAVE", "Infrastructure"),
-            ("Themes ETFs", "DTC R", "Digital Infrastructure"),  # note: will be filtered if invalid
-            ("Themes ETFs", "TCAI", "Digital Infrastructure 2"),
-            ("Themes ETFs", "WGMI", "Bitcoin Mining / HPC"),
-            ("Themes ETFs", "ITB", "Home Construction"),
-            ("Themes ETFs", "BOIL", "Natural Gas"),
-            ("Themes ETFs", "XOP", "Natural Gas 2"),
-            ("Themes ETFs", "ROBO", "Robotics"),
-            ("Themes ETFs", "BOTZ", "Robotics 2"),
-            ("Themes ETFs", "NLR", "Nuclear"),
-            ("Themes ETFs", "NUKZ", "Nuclear 2"),
-            ("Themes ETFs", "ARKG", "Biotech"),
-            ("Themes ETFs", "BIB", "Biotech 2"),
-            ("Themes ETFs", "PPH", "Pharmaceutical"),
-            ("Themes ETFs", "ARKQ", "Drone"),
-            ("Themes ETFs", "JEDI", "Drone 2"),
-            ("Themes ETFs", "IAI", "Brokerage"),
-            ("Themes ETFs", "RTH", "Brokerage 2"),
-            ("Themes ETFs", "XRT", "Retail Shopping"),
-            ("Themes ETFs", "UFO", "Space"),
-            ("Themes ETFs", "KRE", "Regional Banking"),
-            ("Themes ETFs", "KBE", "Banking"),
-            ("Themes ETFs", "JETS", "Airlines"),
-            ("Themes ETFs", "REMX", "Rare Earth"),
-            ("Themes ETFs", "QTUM", "Quantum"),
-            ("Themes ETFs", "MSOS", "Cannabis"),
-        ],
-        columns=["Group", "Ticker", "Name"],
-    )
+    commodities = [
+        ("RING", "Gold Miners", "Commodities"),
+        ("IAU", "Gold", "Commodities"),
+        ("SLV", "Silver", "Commodities"),
+        ("COPX", "Copper Miners", "Commodities"),
+        ("USO", "Oil", "Commodities"),
+    ]
 
-    commodities = pd.DataFrame(
-        [
-            ("Commodity ETFs", "RING", "Gold"),
-            ("Commodity ETFs", "IAU", "Gold 2"),
-            ("Commodity ETFs", "SIL", "Silver"),
-            ("Commodity ETFs", "SLV", "Silver 2"),
-            ("Commodity ETFs", "COPX", "Copper"),
-            ("Commodity ETFs", "USO", "Oil"),
-            ("Commodity ETFs", "BTC-USD", "Bitcoin"),
-            ("Commodity ETFs", "ETH-USD", "Ethereum"),
-            ("Commodity ETFs", "BSOL", "Solana"),
-        ],
-        columns=["Group", "Ticker", "Name"],
-    )
+    countries = [
+        ("VEU", "All-World ex US", "Countries"),
+        ("EMXC", "Emerging Markets ex China", "Countries"),
+        ("EEM", "Emerging Markets", "Countries"),
+        ("MCHI", "China", "Countries"),
+        ("KWEB", "China Internet", "Countries"),
+        ("EWZ", "Brazil", "Countries"),
+        ("EWG", "Germany", "Countries"),
+        ("EWC", "Canada", "Countries"),
+        ("EWS", "Singapore", "Countries"),
+    ]
 
-    countries = pd.DataFrame(
-        [
-            ("Country ETFs", "VEU", "All World ex-US"),
-            ("Country ETFs", "EMXC", "Emerging Mkts ex-China"),
-            ("Country ETFs", "EEM", "Emerging Markets"),
-            ("Country ETFs", "EWZ", "Brazil"),
-            ("Country ETFs", "MCHI", "China"),
-            ("Country ETFs", "KWEB", "China Internet"),
-            ("Country ETFs", "EWG", "Germany"),
-            ("Country ETFs", "EWC", "Canada"),
-            ("Country ETFs", "EWS", "Singapore"),
-        ],
-        columns=["Group", "Ticker", "Name"],
-    )
-
-    # Clean tickers (strip, upper)
-    def clean_df(df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        df["Ticker"] = df["Ticker"].astype(str).str.strip().str.upper()
-        df["Name"] = df["Name"].astype(str).str.strip()
-        df["Group"] = df["Group"].astype(str).str.strip()
-        # remove obvious bad placeholders like "DTC R"
-        df = df[df["Ticker"].str.match(r"^[A-Z0-9\-\.\=]+$")]
-        df = df[df["Ticker"].str.len() > 0]
-        return df.drop_duplicates(subset=["Ticker"], keep="first")
+    def df(rows):
+        out = pd.DataFrame(rows, columns=["Ticker", "Name", "Group"])
+        out["Ticker"] = out["Ticker"].astype(str).str.upper().str.strip()
+        out["Name"] = out["Name"].astype(str).str.strip()
+        out["Group"] = out["Group"].astype(str).str.strip()
+        return out
 
     return {
-        "SPDR Sectors": clean_df(sectors),
-        "Themes ETFs": clean_df(themes),
-        "Commodity ETFs": clean_df(commodities),
-        "Country ETFs": clean_df(countries),
+        "SPDR Sectors": df(sectors),
+        "Themes ETFs": df(themes),
+        "Commodity ETFs": df(commodities),
+        "Country ETFs": df(countries),
     }
 
 
-# =========================
-# Upload / Manage Universe
-# =========================
-def parse_uploaded_universe(file) -> pd.DataFrame:
-    """
-    Expected columns (case-insensitive):
-      - Group (required)
-      - Ticker (required)
-      - Name (optional)
-    """
-    if file is None:
-        return pd.DataFrame(columns=["Group", "Ticker", "Name"])
-
-    name = file.name.lower()
-    if name.endswith(".csv"):
-        df = pd.read_csv(file)
-    elif name.endswith(".xlsx") or name.endswith(".xls"):
-        df = pd.read_excel(file)
-    else:
-        raise ValueError("Upload must be a CSV or Excel file (.csv, .xlsx).")
-
-    # normalize columns
-    cols = {c.lower().strip(): c for c in df.columns}
-    required = ["group", "ticker"]
-    for r in required:
-        if r not in cols:
-            raise ValueError("File must include columns: Group, Ticker (Name optional).")
-
-    group_col = cols["group"]
-    ticker_col = cols["ticker"]
-    name_col = cols.get("name", None)
-
-    out = pd.DataFrame()
-    out["Group"] = df[group_col].astype(str).str.strip()
-    out["Ticker"] = df[ticker_col].astype(str).str.strip().str.upper()
-    out["Name"] = df[name_col].astype(str).str.strip() if name_col else out["Ticker"]
-
-    out = out[out["Ticker"].str.len() > 0]
-    out = out[out["Group"].str.len() > 0]
-    out = out[out["Ticker"].str.match(r"^[A-Z0-9\-\.\=]+$")]
-
-    # first group wins within the uploaded file
-    out = out.drop_duplicates(subset=["Ticker"], keep="first").reset_index(drop=True)
-    return out
-
-
-def merge_universes(predef_df: pd.DataFrame, uploaded_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Option A: First group wins (uploaded first, then predef excluding duplicates).
-    That means: if ticker exists in uploaded, we keep uploaded's Group/Name.
-    """
-    if uploaded_df is None or uploaded_df.empty:
-        return predef_df.copy()
-
-    uploaded_df = uploaded_df.copy()
-    predef_df = predef_df.copy()
-
-    uploaded_tickers = set(uploaded_df["Ticker"].tolist())
-    predef_df = predef_df[~predef_df["Ticker"].isin(uploaded_tickers)]
-    merged = pd.concat([uploaded_df, predef_df], ignore_index=True)
-    return merged.reset_index(drop=True)
-
-
-def template_csv_bytes() -> bytes:
-    df = pd.DataFrame(
+# ----------------------------
+# Upload parsing
+# ----------------------------
+def sample_universe_template() -> pd.DataFrame:
+    # Group is optional but recommended since you want organization.
+    return pd.DataFrame(
         [
-            {"Group": "Themes ETFs", "Ticker": "SOXX", "Name": "Semiconductors"},
-            {"Group": "Themes ETFs", "Ticker": "CIBR", "Name": "Cybersecurity"},
-            {"Group": "Commodity ETFs", "Ticker": "IAU", "Name": "Gold"},
-            {"Group": "Country ETFs", "Ticker": "EWG", "Name": "Germany"},
+            {"Ticker": "XLK", "Name": "Technology", "Group": "SPDR Sectors"},
+            {"Ticker": "SOXX", "Name": "Semiconductors", "Group": "Themes"},
+            {"Ticker": "IAU", "Name": "Gold", "Group": "Commodities"},
+            {"Ticker": "EWG", "Name": "Germany", "Group": "Countries"},
         ]
     )
-    return df.to_csv(index=False).encode("utf-8")
 
 
-# =========================
-# Data fetch helpers
-# =========================
-@st.cache_data(show_spinner=False)
-def yf_download_close(tickers: tuple, period: str, interval: str) -> pd.DataFrame:
+def read_uploaded_universe(uploaded_file) -> Tuple[pd.DataFrame, str]:
     """
-    Returns DataFrame with columns as tickers and values as Adj Close (preferred) or Close.
+    Returns (df, error_message). error_message="" if ok.
+    Required column: Ticker
+    Optional columns: Name, Group
     """
-    tickers_list = list(dict.fromkeys([t for t in tickers if isinstance(t, str) and t.strip()]))
-    if not tickers_list:
+    if uploaded_file is None:
+        return pd.DataFrame(), ""
+
+    name = uploaded_file.name.lower()
+    try:
+        if name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        elif name.endswith(".xlsx") or name.endswith(".xls"):
+            try:
+                import openpyxl  # noqa: F401
+            except Exception:
+                return pd.DataFrame(), "Missing optional dependency 'openpyxl'. Add openpyxl to requirements.txt or upload a CSV instead."
+            df = pd.read_excel(uploaded_file)
+        else:
+            return pd.DataFrame(), "Unsupported file type. Upload CSV or XLSX."
+    except Exception as e:
+        return pd.DataFrame(), f"Could not read file: {e}"
+
+    if df.empty:
+        return pd.DataFrame(), "Uploaded file is empty."
+
+    # Normalize columns
+    cols = {c.strip(): c for c in df.columns}
+    ticker_col = None
+    for c in df.columns:
+        if str(c).strip().lower() == "ticker":
+            ticker_col = c
+            break
+    if ticker_col is None:
+        return pd.DataFrame(), "Upload file must include a 'Ticker' column."
+
+    out = pd.DataFrame()
+    out["Ticker"] = df[ticker_col].astype(str).str.upper().str.strip()
+
+    # Optional columns
+    name_col = None
+    group_col = None
+    for c in df.columns:
+        cl = str(c).strip().lower()
+        if cl == "name":
+            name_col = c
+        if cl == "group":
+            group_col = c
+
+    out["Name"] = df[name_col].astype(str).str.strip() if name_col else ""
+    out["Group"] = df[group_col].astype(str).str.strip() if group_col else ""
+
+    # Drop blanks / junk
+    out = out.replace({"Ticker": {"": np.nan, "NAN": np.nan, "NONE": np.nan}})
+    out = out.dropna(subset=["Ticker"])
+    out = out[out["Ticker"].str.len() > 0]
+    out = out.drop_duplicates(subset=["Ticker"], keep="first").reset_index(drop=True)
+
+    return out, ""
+
+
+def merge_universe(base: pd.DataFrame, uploaded: pd.DataFrame) -> pd.DataFrame:
+    """
+    Option A: first group wins (base wins). Dedupe by ticker.
+    New tickers from upload are appended.
+    If upload has Name/Group missing, fill where possible.
+    """
+    if uploaded is None or uploaded.empty:
+        return base.copy()
+
+    base2 = base.copy()
+    up2 = uploaded.copy()
+
+    base2["Ticker"] = base2["Ticker"].astype(str).str.upper().str.strip()
+    up2["Ticker"] = up2["Ticker"].astype(str).str.upper().str.strip()
+
+    # Append only tickers not already present
+    existing = set(base2["Ticker"].tolist())
+    add = up2[~up2["Ticker"].isin(existing)].copy()
+
+    # If Group missing in add, default to "Uploaded"
+    if "Group" not in add.columns:
+        add["Group"] = "Uploaded"
+    add["Group"] = add["Group"].replace("", "Uploaded")
+
+    # If Name missing in add, set to Ticker
+    if "Name" not in add.columns:
+        add["Name"] = add["Ticker"]
+    add["Name"] = add["Name"].replace("", add["Ticker"])
+
+    out = pd.concat([base2, add[["Ticker", "Name", "Group"]]], ignore_index=True)
+    out = out.drop_duplicates(subset=["Ticker"], keep="first").reset_index(drop=True)
+
+    return out
+
+
+# ----------------------------
+# Data fetch & transforms
+# ----------------------------
+@st.cache_data(show_spinner=False, ttl=60 * 30)
+def fetch_prices(tickers: List[str], period_years: int) -> pd.DataFrame:
+    """
+    Returns daily Adj Close (or Close) for tickers in columns.
+    Robust to yfinance multiindex output.
+    """
+    tickers = [t.upper().strip() for t in tickers if t and isinstance(t, str)]
+    tickers = list(dict.fromkeys(tickers))
+    if not tickers:
         return pd.DataFrame()
+
+    period = f"{int(period_years)}y"
 
     df = yf.download(
-        tickers_list,
+        tickers=tickers,
         period=period,
-        interval=interval,
+        interval="1d",
         auto_adjust=False,
-        progress=False,
-        group_by="column",
+        group_by="ticker",
         threads=True,
+        progress=False,
     )
 
-    if df is None or len(df) == 0:
+    if df is None or df.empty:
         return pd.DataFrame()
 
-    # yfinance returns:
-    # - single ticker: columns like ["Open","High","Low","Close","Adj Close","Volume"]
-    # - multi ticker: columns multiindex [field, ticker]
+    # If single ticker, columns are single level
+    if isinstance(df.columns, pd.Index) and ("Close" in df.columns or "Adj Close" in df.columns):
+        px = df["Adj Close"] if "Adj Close" in df.columns else df["Close"]
+        px = px.to_frame(name=tickers[0])
+        px.index = pd.to_datetime(px.index)
+        return px.dropna(how="all")
+
+    # MultiIndex: (field, ticker) or (ticker, field) depending on version
     if isinstance(df.columns, pd.MultiIndex):
-        fields = df.columns.get_level_values(0).unique().tolist()
-        preferred = "Adj Close" if "Adj Close" in fields else ("Close" if "Close" in fields else None)
-        if preferred is None:
-            raise ValueError("Expected 'Close' or 'Adj Close' from Yahoo Finance.")
-        out = df[preferred].copy()
-    else:
-        preferred = "Adj Close" if "Adj Close" in df.columns else ("Close" if "Close" in df.columns else None)
-        if preferred is None:
-            raise ValueError("Expected 'Close' or 'Adj Close' from Yahoo Finance.")
-        out = df[[preferred]].copy()
-        out.columns = [tickers_list[0]]
+        # Try common shapes
+        # Shape A: first level is OHLC field
+        if "Adj Close" in df.columns.get_level_values(0) or "Close" in df.columns.get_level_values(0):
+            field = "Adj Close" if "Adj Close" in df.columns.get_level_values(0) else "Close"
+            px = df[field].copy()
+            px.index = pd.to_datetime(px.index)
+            px = px.dropna(how="all")
+            # px columns are tickers
+            return px
 
-    out.index = pd.to_datetime(out.index)
-    out = out.dropna(how="all")
-    return out
+        # Shape B: second level is OHLC field
+        if "Adj Close" in df.columns.get_level_values(1) or "Close" in df.columns.get_level_values(1):
+            field = "Adj Close" if "Adj Close" in df.columns.get_level_values(1) else "Close"
+            px = df.xs(field, level=1, axis=1).copy()
+            px.index = pd.to_datetime(px.index)
+            px = px.dropna(how="all")
+            return px
+
+    return pd.DataFrame()
 
 
-def to_weekly(close_daily: pd.DataFrame) -> pd.DataFrame:
+def to_weekly(px_daily: pd.DataFrame) -> pd.DataFrame:
+    if px_daily.empty:
+        return px_daily
+    # Weekly last (Friday anchor helps consistency)
+    wk = px_daily.resample("W-FRI").last()
+    wk = wk.dropna(how="all")
+    return wk
+
+
+def rolling_zscore(s: pd.Series, window: int) -> pd.Series:
+    mu = s.rolling(window, min_periods=max(5, window // 3)).mean()
+    sd = s.rolling(window, min_periods=max(5, window // 3)).std(ddof=0)
+    z = (s - mu) / sd.replace(0, np.nan)
+    return z
+
+
+def compute_rrg(prices: pd.DataFrame, benchmark: str, lookback: int, momentum: int) -> Dict[str, pd.DataFrame]:
     """
-    Resample daily close to weekly (Friday close).
+    Build RRG series for each symbol:
+    - RS = (symbol / benchmark) * 100
+    - RS-Ratio ~ rolling z-score of RS
+    - RS-Momentum ~ rolling z-score of change in RS-Ratio
+    Returns dict symbol -> DataFrame(index=date, columns=["rs_ratio","rs_mom"])
     """
-    if close_daily.empty:
-        return close_daily
-    weekly = close_daily.resample("W-FRI").last()
-    return weekly.dropna(how="all")
+    if prices.empty or benchmark not in prices.columns:
+        return {}
 
+    bench = prices[benchmark].dropna()
+    out = {}
 
-# =========================
-# RRG math (approximation)
-# =========================
-def zscore(series: pd.Series, window: int) -> pd.Series:
-    mean = series.rolling(window, min_periods=max(5, window // 3)).mean()
-    std = series.rolling(window, min_periods=max(5, window // 3)).std()
-    return (series - mean) / std
-
-
-def compute_rrg_components(
-    prices: pd.DataFrame,
-    benchmark: str,
-    lookback_weeks: int,
-    momentum_weeks: int,
-) -> pd.DataFrame:
-    """
-    Given price series (weekly or daily already aligned), compute:
-      - RS series: price / benchmark_price
-      - RS-Ratio (standardized): zscore of RS (lookback)
-      - RS-Momentum (standardized): zscore of ROC of RS (momentum)
-    """
-    if benchmark not in prices.columns:
-        raise ValueError("Benchmark price series missing from downloaded data.")
-
-    df = prices.copy().dropna(how="all")
-    df = df.dropna(axis=1, how="all")
-
-    # align
-    bench = df[benchmark].dropna()
-    df = df.loc[bench.index].copy()
-    df = df.dropna(subset=[benchmark])
-
-    out_rows = []
-    for sym in df.columns:
+    for sym in prices.columns:
         if sym == benchmark:
             continue
-        s = df[sym].dropna()
-        common_idx = s.index.intersection(bench.index)
-        if len(common_idx) < max(lookback_weeks, momentum_weeks) + 5:
+        s = prices[sym].dropna()
+        df = pd.concat([s, bench], axis=1, join="inner")
+        df.columns = ["sym", "bench"]
+        df = df.dropna()
+        if len(df) < (lookback + momentum + 5):
             continue
 
-        rs = (s.loc[common_idx] / bench.loc[common_idx]).rename("RS")
-        rs_ratio = zscore(rs, lookback_weeks).rename("RS_Ratio")
-        rs_roc = rs.pct_change().rename("RS_ROC")
-        rs_mom = zscore(rs_roc, momentum_weeks).rename("RS_Momentum")
+        rs = (df["sym"] / df["bench"]) * 100.0
 
-        tmp = pd.concat([rs_ratio, rs_mom], axis=1).dropna()
-        tmp["Ticker"] = sym
-        tmp = tmp.reset_index().rename(columns={"index": "Date"})
-        out_rows.append(tmp)
+        # RS-Ratio: z-score of RS over lookback
+        rs_ratio = rolling_zscore(rs, lookback)
 
-    if not out_rows:
-        return pd.DataFrame(columns=["Date", "RS_Ratio", "RS_Momentum", "Ticker"])
+        # RS-Momentum: z-score of delta in RS-Ratio over momentum window
+        rs_ratio_delta = rs_ratio - rs_ratio.shift(momentum)
+        rs_mom = rolling_zscore(rs_ratio_delta, lookback)
 
-    out = pd.concat(out_rows, ignore_index=True)
+        z = pd.DataFrame({"rs_ratio": rs_ratio, "rs_mom": rs_mom}, index=df.index).dropna()
+        if not z.empty:
+            out[sym] = z
+
     return out
 
 
-# =========================
+# ----------------------------
 # Interpretation helpers
-# =========================
-def classify_rs_ratio(x: float) -> str:
-    return "Improving" if x >= 0 else "Weakening"
+# ----------------------------
+def direction_arrow(dx: float, dy: float) -> str:
+    if dx == 0 and dy == 0:
+        return "•"
+    ang = math.degrees(math.atan2(dy, dx))  # -180..180
+    # Map to 8 sectors
+    if -22.5 <= ang < 22.5:
+        return "→"
+    if 22.5 <= ang < 67.5:
+        return "↗"
+    if 67.5 <= ang < 112.5:
+        return "↑"
+    if 112.5 <= ang < 157.5:
+        return "↖"
+    if ang >= 157.5 or ang < -157.5:
+        return "←"
+    if -157.5 <= ang < -112.5:
+        return "↙"
+    if -112.5 <= ang < -67.5:
+        return "↓"
+    if -67.5 <= ang < -22.5:
+        return "↘"
+    return "•"
 
 
-def classify_momentum(y: float) -> str:
-    # 3-bucket for readability
-    if y > 0.5:
+def label_change(val: float, prev: float, thr: float, down_label: str) -> str:
+    d = val - prev
+    if d > thr:
         return "Improving"
-    if y < -0.5:
-        return "Weakening"
+    if d < -thr:
+        return down_label
     return "Flat"
 
 
@@ -346,464 +372,477 @@ def quadrant(x: float, y: float) -> str:
     return "Weakening"
 
 
-def angle_to_arrow(dx: float, dy: float) -> str:
-    # 8-direction arrows based on angle
-    ang = math.degrees(math.atan2(dy, dx))  # -180..180
-    # bins centered on cardinal/intercardinal
-    dirs = [
-        (22.5, "→"),
-        (67.5, "↗"),
-        (112.5, "↑"),
-        (157.5, "↖"),
-        (180.0, "←"),
-        (-157.5, "←"),
-        (-112.5, "↙"),
-        (-67.5, "↓"),
-        (-22.5, "↘"),
-    ]
-    for th, ar in dirs:
-        if ang <= th:
-            return ar
-    return "→"
-
-
-def speed_bucket_from_percentile(p: float) -> str:
-    # 4 buckets
-    if p >= 0.75:
-        return "Hot/Climactic"
-    if p >= 0.50:
-        return "Fast"
-    if p >= 0.25:
-        return "Medium"
-    return "Slow"
-
-
-# =========================
-# Plotting
-# =========================
-def make_rrg_figure(
-    rrg_df: pd.DataFrame,
+def build_snapshot(
+    rrg_series: Dict[str, pd.DataFrame],
     meta: pd.DataFrame,
-    tail_len: int,
-    title: str,
-) -> go.Figure:
+) -> pd.DataFrame:
     """
-    rrg_df: columns [Date, RS_Ratio, RS_Momentum, Ticker]
-    meta: columns [Ticker, Name, Group, _COLORHEX]
+    One row per symbol with latest coordinates and interpreted fields.
     """
-    fig = go.Figure()
-
-    # Quadrant shading (light)
-    # We'll set axis ranges dynamically from data with padding
-    x_all = rrg_df["RS_Ratio"].values
-    y_all = rrg_df["RS_Momentum"].values
-
-    if len(x_all) == 0:
-        fig.update_layout(title=title)
-        return fig
-
-    x_min, x_max = np.nanmin(x_all), np.nanmax(x_all)
-    y_min, y_max = np.nanmin(y_all), np.nanmax(y_all)
-
-    # padding so points outside don’t get clipped
-    pad_x = max(0.75, 0.15 * (x_max - x_min + 1e-9))
-    pad_y = max(0.75, 0.15 * (y_max - y_min + 1e-9))
-
-    x0, x1 = x_min - pad_x, x_max + pad_x
-    y0, y1 = y_min - pad_y, y_max + pad_y
-
-    # shaded rectangles
-    fig.add_shape(type="rect", x0=x0, x1=0, y0=0, y1=y1, fillcolor="rgba(80,120,255,0.08)", line_width=0)
-    fig.add_shape(type="rect", x0=0, x1=x1, y0=0, y1=y1, fillcolor="rgba(80,200,120,0.10)", line_width=0)
-    fig.add_shape(type="rect", x0=x0, x1=0, y0=y0, y1=0, fillcolor="rgba(255,80,80,0.08)", line_width=0)
-    fig.add_shape(type="rect", x0=0, x1=x1, y0=y0, y1=0, fillcolor="rgba(255,200,80,0.10)", line_width=0)
-
-    # axes cross
-    fig.add_shape(type="line", x0=0, x1=0, y0=y0, y1=y1, line=dict(color="rgba(0,0,0,0.35)", width=1))
-    fig.add_shape(type="line", x0=x0, x1=x1, y0=0, y1=0, line=dict(color="rgba(0,0,0,0.35)", width=1))
-
-    # quadrant labels (corners)
-    fig.add_annotation(x=x0 + 0.15 * (0 - x0), y=y1 - 0.10 * (y1 - 0), text="Improving", showarrow=False,
-                       font=dict(color="rgba(0,0,255,0.75)", size=12))
-    fig.add_annotation(x=x1 - 0.15 * (x1 - 0), y=y1 - 0.10 * (y1 - 0), text="Leading", showarrow=False,
-                       font=dict(color="rgba(0,140,60,0.85)", size=12))
-    fig.add_annotation(x=x0 + 0.15 * (0 - x0), y=y0 + 0.10 * (0 - y0), text="Lagging", showarrow=False,
-                       font=dict(color="rgba(180,0,0,0.75)", size=12))
-    fig.add_annotation(x=x1 - 0.15 * (x1 - 0), y=y0 + 0.10 * (0 - y0), text="Weakening", showarrow=False,
-                       font=dict(color="rgba(200,120,0,0.85)", size=12))
-
-    # plot each ticker tail as ONE connected trace (so it always connects head/tail)
-    for sym, g in rrg_df.groupby("Ticker"):
-        g = g.sort_values("Date").tail(tail_len)
-        if len(g) < 2:
-            continue
-
-        row = meta[meta["Ticker"] == sym]
-        name = sym if row.empty else row.iloc[0]["Name"]
-        color = "#1f77b4" if row.empty else row.iloc[0]["_COLORHEX"]
-
-        # tail line + small markers
-        fig.add_trace(
-            go.Scatter(
-                x=g["RS_Ratio"],
-                y=g["RS_Momentum"],
-                mode="lines+markers",
-                name=f"{sym} ({name})",
-                line=dict(color=color, width=2),
-                marker=dict(size=5, color=color),
-                hovertemplate=(
-                    f"<b>{sym}</b> ({name})<br>"
-                    "Date=%{customdata}<br>"
-                    "RS-Ratio=%{x:.2f}<br>"
-                    "RS-Momentum=%{y:.2f}<extra></extra>"
-                ),
-                customdata=g["Date"].dt.strftime("%Y-%m-%d"),
-                showlegend=False,  # keep legend clean; we show “Most recent point” legend separately
-            )
-        )
-
-        # head marker (most recent point) — diamond, larger, black outline
-        head = g.iloc[-1]
-        fig.add_trace(
-            go.Scatter(
-                x=[head["RS_Ratio"]],
-                y=[head["RS_Momentum"]],
-                mode="markers",
-                marker=dict(
-                    symbol="diamond",
-                    size=14,
-                    color=color,
-                    line=dict(color="black", width=2),
-                ),
-                name=f"{sym} ({name})",
-                hovertemplate=(
-                    f"<b>{sym}</b> ({name})<br>"
-                    "Most recent<br>"
-                    "Date=%{customdata}<br>"
-                    "RS-Ratio=%{x:.2f}<br>"
-                    "RS-Momentum=%{y:.2f}<extra></extra>"
-                ),
-                customdata=[pd.to_datetime(head["Date"]).strftime("%Y-%m-%d")],
-                showlegend=True,
-            )
-        )
-
-    fig.update_layout(
-        title=title,
-        height=520,
-        margin=dict(l=30, r=30, t=60, b=30),
-        legend_title_text="Most recent point",
-        xaxis=dict(title="RS-Ratio (standardized)", range=[x0, x1], zeroline=False),
-        yaxis=dict(title="RS-Momentum (standardized)", range=[y0, y1], zeroline=False),
-    )
-    return fig
-
-
-# =========================
-# Snapshot tables (with color swatches)
-# =========================
-def assign_colors(meta: pd.DataFrame) -> pd.DataFrame:
-    # stable color assignment based on ticker order
-    palette = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b",
-        "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
-        "#393b79", "#637939", "#8c6d31", "#843c39", "#7b4173",
-    ]
-    meta = meta.copy()
-    colors = []
-    for i, _ in enumerate(meta["Ticker"].tolist()):
-        colors.append(palette[i % len(palette)])
-    meta["_COLORHEX"] = colors
-    return meta
-
-
-def compute_snapshot(rrg_df: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
     rows = []
-    for sym, g in rrg_df.groupby("Ticker"):
-        g = g.sort_values("Date")
-        if len(g) < 2:
+    for sym, df in rrg_series.items():
+        if df.shape[0] < 2:
             continue
-        last = g.iloc[-1]
-        prev = g.iloc[-2]
-        dx = float(last["RS_Ratio"] - prev["RS_Ratio"])
-        dy = float(last["RS_Momentum"] - prev["RS_Momentum"])
-        spd = float(math.sqrt(dx * dx + dy * dy))
+        x = float(df["rs_ratio"].iloc[-1])
+        y = float(df["rs_mom"].iloc[-1])
+        x0 = float(df["rs_ratio"].iloc[-2])
+        y0 = float(df["rs_mom"].iloc[-2])
+        dx = x - x0
+        dy = y - y0
+        spd = math.sqrt(dx * dx + dy * dy)
+
+        m = meta[meta["Ticker"] == sym]
+        nm = m["Name"].iloc[0] if not m.empty else sym
+        grp = m["Group"].iloc[0] if not m.empty else "—"
 
         rows.append(
             {
                 "Ticker": sym,
-                "RS_Ratio_val": float(last["RS_Ratio"]),
-                "RS_Momentum_val": float(last["RS_Momentum"]),
-                "dx": dx,
-                "dy": dy,
-                "RotationSpeedRaw": spd,
+                "Name": nm,
+                "Group": grp,
+                "_x": x,
+                "_y": y,
+                "_dx": dx,
+                "_dy": dy,
+                "_speed": spd,
+                "Quadrant": quadrant(x, y),
             }
         )
-
     snap = pd.DataFrame(rows)
     if snap.empty:
         return snap
 
-    # percentiles for speed buckets
-    snap["SpeedPct"] = snap["RotationSpeedRaw"].rank(pct=True)
+    # thresholds for "Flat" detection based on distribution
+    # Use robust threshold = median absolute delta / 2 (bounded)
+    dx_thr = float(np.clip(np.nanmedian(np.abs(snap["_dx"])) / 2.0, 0.03, 0.15))
+    dy_thr = float(np.clip(np.nanmedian(np.abs(snap["_dy"])) / 2.0, 0.03, 0.15))
 
-    snap["RS-Ratio"] = snap["RS_Ratio_val"].apply(classify_rs_ratio)
-    snap["Momentum"] = snap["RS_Momentum_val"].apply(classify_momentum)
-    snap["Direction"] = [angle_to_arrow(dx, dy) for dx, dy in zip(snap["dx"], snap["dy"])]
-    snap["Rotation Speed"] = snap["SpeedPct"].apply(speed_bucket_from_percentile)
-    snap["Quadrant"] = [quadrant(x, y) for x, y in zip(snap["RS_Ratio_val"], snap["RS_Momentum_val"])]
+    snap["RS-Ratio"] = snap.apply(lambda r: label_change(r["_x"], r["_x"] - r["_dx"], dx_thr, "Weakening"), axis=1)
+    snap["Momentum"] = snap.apply(lambda r: label_change(r["_y"], r["_y"] - r["_dy"], dy_thr, "Falling"), axis=1)
+    snap["Direction"] = snap.apply(lambda r: direction_arrow(r["_dx"], r["_dy"]), axis=1)
 
-    snap = snap.merge(meta[["Ticker", "Name", "Group", "_COLORHEX"]], on="Ticker", how="left")
-    snap["Name"] = snap["Name"].fillna(snap["Ticker"])
-    snap["Group"] = snap["Group"].fillna("")
+    # Speed buckets via percentiles (4 buckets)
+    p25, p50, p75 = np.nanpercentile(snap["_speed"], [25, 50, 75])
+    def speed_bucket(v: float) -> str:
+        if v <= p25:
+            return "Slow"
+        if v <= p50:
+            return "Medium"
+        if v <= p75:
+            return "Fast"
+        return "Hot/Climactic"
+    snap["Rotation Speed"] = snap["_speed"].apply(speed_bucket)
 
-    # Display-only: keep swatch, hide _COLORHEX later
     return snap
 
 
-def render_color_table(df: pd.DataFrame, hide_cols: list[str] | None = None):
-    if df is None or df.empty:
-        st.info("No snapshot rows to display.")
-        return
+# ----------------------------
+# Plotting
+# ----------------------------
+def color_palette(n: int) -> List[str]:
+    # A bright, readable palette. (No need for seaborn.)
+    base = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+        "#bcbd22", "#17becf",
+        "#0b3d91", "#ff4d4d", "#00a878", "#ff70e6",
+        "#00c2ff", "#ffa600",
+    ]
+    if n <= len(base):
+        return base[:n]
+    # Repeat if needed
+    out = []
+    i = 0
+    while len(out) < n:
+        out.append(base[i % len(base)])
+        i += 1
+    return out
 
-    hide_cols = hide_cols or []
-    show = df.copy()
 
-    # build visible “Color” swatch from _COLORHEX
-    def swatch(hexcode: str) -> str:
-        return f"<span style='display:inline-block;width:12px;height:12px;border-radius:2px;background:{hexcode};border:1px solid rgba(0,0,0,0.25)'></span>"
+def make_rrg_figure(
+    rrg_series: Dict[str, pd.DataFrame],
+    meta: pd.DataFrame,
+    tail_len: int,
+    title: str,
+    auto_zoom: bool = True,
+    fixed_range: float = 4.0,
+) -> Tuple[alt.Chart, pd.DataFrame]:
+    """
+    Returns (chart, color_map_df)
+    color_map_df: Ticker, Name, Group, ColorHex
+    """
+    if not rrg_series:
+        return alt.Chart(pd.DataFrame()), pd.DataFrame()
 
-    show.insert(0, "Color", show["_COLORHEX"].fillna("#999999").apply(swatch))
+    symbols = list(rrg_series.keys())
+    colors = color_palette(len(symbols))
+    cmap = {sym: colors[i] for i, sym in enumerate(symbols)}
 
-    for c in hide_cols:
-        if c in show.columns:
-            show = show.drop(columns=[c])
+    meta2 = meta.copy()
+    meta2["Ticker"] = meta2["Ticker"].str.upper()
 
-    # also hide internal columns if present
-    for c in ["_COLORHEX", "RS_Ratio_val", "RS_Momentum_val", "dx", "dy", "RotationSpeedRaw", "SpeedPct"]:
-        if c in show.columns:
-            show = show.drop(columns=[c])
+    # Build long dataframe of tail points
+    pts = []
+    heads = []
+    for sym, df in rrg_series.items():
+        d = df.copy()
+        if d.empty:
+            continue
+        d = d.tail(max(3, tail_len))
+        d = d.reset_index().rename(columns={"index": "Date"})
+        d["Ticker"] = sym
+        d["ColorHex"] = cmap[sym]
+        pts.append(d)
 
-    html = (
-        show.to_html(escape=False, index=False)
-        .replace("<table", "<table style='width:100%; border-collapse:collapse;'")
-        .replace("<th>", "<th style='text-align:left; padding:8px; border-bottom:1px solid #eee; font-size:12px;'>")
-        .replace("<td>", "<td style='padding:8px; border-bottom:1px solid #f3f3f3; font-size:12px;'>")
+        # Head is last point
+        last = d.iloc[-1].copy()
+        heads.append(last)
+
+    points = pd.concat(pts, ignore_index=True)
+    head_df = pd.DataFrame(heads)
+
+    # Join names/groups
+    join = meta2[["Ticker", "Name", "Group"]].drop_duplicates()
+    points = points.merge(join, on="Ticker", how="left")
+    head_df = head_df.merge(join, on="Ticker", how="left")
+
+    # Axis handling
+    if auto_zoom:
+        xmin = float(np.nanmin(points["rs_ratio"]))
+        xmax = float(np.nanmax(points["rs_ratio"]))
+        ymin = float(np.nanmin(points["rs_mom"]))
+        ymax = float(np.nanmax(points["rs_mom"]))
+        pad_x = max(0.4, (xmax - xmin) * 0.10)
+        pad_y = max(0.4, (ymax - ymin) * 0.10)
+        # Force include 0 and quadrant boundaries for readability
+        xmin = min(xmin - pad_x, -0.2)
+        xmax = max(xmax + pad_x, 0.2)
+        ymin = min(ymin - pad_y, -0.2)
+        ymax = max(ymax + pad_y, 0.2)
+    else:
+        xmin, xmax = -fixed_range, fixed_range
+        ymin, ymax = -fixed_range, fixed_range
+
+    # Quadrant shading backgrounds
+    bg = pd.DataFrame(
+        [
+            {"x0": xmin, "x1": 0, "y0": 0, "y1": ymax, "q": "Improving", "c": "#eef2ff"},
+            {"x0": 0, "x1": xmax, "y0": 0, "y1": ymax, "q": "Leading", "c": "#ecfdf5"},
+            {"x0": xmin, "x1": 0, "y0": ymin, "y1": 0, "q": "Lagging", "c": "#fef2f2"},
+            {"x0": 0, "x1": xmax, "y0": ymin, "y1": 0, "q": "Weakening", "c": "#fff7ed"},
+        ]
     )
-    st.markdown(html, unsafe_allow_html=True)
+
+    base = alt.Chart(points).properties(
+        width="container",
+        height=420,
+        title=title,
+    )
+
+    quad = (
+        alt.Chart(bg)
+        .mark_rect(opacity=0.55)
+        .encode(
+            x=alt.X("x0:Q", scale=alt.Scale(domain=[xmin, xmax]), title="RS-Ratio (standardized)"),
+            x2="x1:Q",
+            y=alt.Y("y0:Q", scale=alt.Scale(domain=[ymin, ymax]), title="RS-Momentum (standardized)"),
+            y2="y1:Q",
+            color=alt.Color("c:N", scale=None, legend=None),
+        )
+    )
+
+    # Axes cross lines
+    xline = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#2d2d2d", opacity=0.6).encode(x="x:Q")
+    yline = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#2d2d2d", opacity=0.6).encode(y="y:Q")
+
+    # Tail path lines (connect by Date per Ticker)
+    line = (
+        base.mark_line(point=False)
+        .encode(
+            x="rs_ratio:Q",
+            y="rs_mom:Q",
+            detail="Ticker:N",
+            color=alt.Color("Ticker:N", scale=alt.Scale(domain=symbols, range=[cmap[s] for s in symbols]), legend=None),
+            order=alt.Order("Date:T", sort="ascending"),
+            tooltip=[
+                alt.Tooltip("Ticker:N"),
+                alt.Tooltip("Name:N"),
+                alt.Tooltip("Group:N"),
+                alt.Tooltip("Date:T"),
+                alt.Tooltip("rs_ratio:Q", title="RS-Ratio", format=".2f"),
+                alt.Tooltip("rs_mom:Q", title="RS-Mom", format=".2f"),
+            ],
+        )
+    )
+
+    dots = (
+        base.mark_circle(size=24, opacity=0.95)
+        .encode(
+            x="rs_ratio:Q",
+            y="rs_mom:Q",
+            color=alt.Color("Ticker:N", scale=alt.Scale(domain=symbols, range=[cmap[s] for s in symbols]), legend=None),
+            order=alt.Order("Date:T", sort="ascending"),
+        )
+    )
+
+    # Head markers (big diamond w/ black outline)
+    head = (
+        alt.Chart(head_df)
+        .mark_point(shape="diamond", size=180, filled=True, stroke="black", strokeWidth=1.6)
+        .encode(
+            x=alt.X("rs_ratio:Q", scale=alt.Scale(domain=[xmin, xmax]), title="RS-Ratio (standardized)"),
+            y=alt.Y("rs_mom:Q", scale=alt.Scale(domain=[ymin, ymax]), title="RS-Momentum (standardized)"),
+            color=alt.Color("Ticker:N", scale=alt.Scale(domain=symbols, range=[cmap[s] for s in symbols]), legend=None),
+            tooltip=[
+                alt.Tooltip("Ticker:N"),
+                alt.Tooltip("Name:N"),
+                alt.Tooltip("Group:N"),
+                alt.Tooltip("rs_ratio:Q", title="RS-Ratio", format=".2f"),
+                alt.Tooltip("rs_mom:Q", title="RS-Mom", format=".2f"),
+            ],
+        )
+    )
+
+    # Corner quadrant labels
+    labels = pd.DataFrame(
+        [
+            {"x": xmin + (xmax - xmin) * 0.03, "y": ymax - (ymax - ymin) * 0.06, "t": "Improving", "c": "#1d4ed8"},
+            {"x": xmax - (xmax - xmin) * 0.12, "y": ymax - (ymax - ymin) * 0.06, "t": "Leading", "c": "#047857"},
+            {"x": xmin + (xmax - xmin) * 0.03, "y": ymin + (ymax - ymin) * 0.08, "t": "Lagging", "c": "#b91c1c"},
+            {"x": xmax - (xmax - xmin) * 0.16, "y": ymin + (ymax - ymin) * 0.08, "t": "Weakening", "c": "#c2410c"},
+        ]
+    )
+    qtext = (
+        alt.Chart(labels)
+        .mark_text(fontSize=12, fontWeight="bold")
+        .encode(x="x:Q", y="y:Q", text="t:N", color=alt.Color("c:N", scale=None, legend=None))
+    )
+
+    chart = (quad + xline + yline + line + dots + head + qtext).configure_title(
+        fontSize=16, anchor="start"
+    )
+
+    color_map_df = meta2.merge(
+        pd.DataFrame({"Ticker": list(cmap.keys()), "ColorHex": list(cmap.values())}),
+        on="Ticker",
+        how="right",
+    )[["Ticker", "Name", "Group", "ColorHex"]]
+
+    return chart, color_map_df
 
 
-# =========================
+# ----------------------------
+# Table rendering with swatches
+# ----------------------------
+def style_color_swatch(df: pd.DataFrame, hex_col: str = "ColorHex") -> pd.io.formats.style.Styler:
+    """
+    Create a 'Color' column with a swatch, use ColorHex for background.
+    """
+    d = df.copy()
+    d["Color"] = "■"
+    if hex_col not in d.columns:
+        d[hex_col] = "#444444"
+
+    # Order columns (no _COLORHEX)
+    show_cols = [c for c in ["Color", "Ticker", "Name", "Group", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "Quadrant"] if c in d.columns]
+    d = d[show_cols + ([hex_col] if hex_col in d.columns else [])]
+
+    def color_cells(col):
+        if col.name != "Color":
+            return [""] * len(col)
+        # Use underlying ColorHex
+        colors = df[hex_col].tolist() if hex_col in df.columns else ["#444444"] * len(df)
+        return [f"background-color: {h}; color: {h};" for h in colors]  # hide the ■ text by matching foreground
+
+    sty = d.style.apply(color_cells, axis=0)
+    # Hide the ColorHex helper column if present
+    if hex_col in d.columns:
+        sty = sty.hide(columns=[hex_col])
+    return sty
+
+
+# ----------------------------
 # UI
-# =========================
+# ----------------------------
 st.title("Relative Rotation Graph (RRG)")
-st.caption("Track sector, theme, commodity, and country rotation vs a benchmark. Approximation of JdK RS-Ratio and RS-Momentum.")
+st.caption("Track sector/theme/commodity/country rotation vs a benchmark. Approximation of JdK RS-Ratio and RS-Momentum.")
 
 universes = predefined_universes()
 
 with st.sidebar:
     st.header("RRG Settings")
-
     universe_name = st.selectbox("Universe", list(universes.keys()), index=0)
-    default_benchmark = "SPY"
+
     benchmark = st.selectbox("Benchmark", ["SPY", "QQQ", "IWM", "DIA"], index=0)
 
     timeframe = st.radio("Timeframe", ["Daily", "Weekly"], index=1)
+    if timeframe == "Daily":
+        period_years = 1
+        st.caption("History: 1 year(s) (enforced)")
+    else:
+        period_years = 3
+        st.caption("History: 3 year(s) (enforced)")
 
-    # Enforce your rule:
-    # - Daily uses 1 year
-    # - Weekly uses 3 years
-    fixed_years = 1 if timeframe == "Daily" else 3
-    st.caption(f"History: {fixed_years} year(s) (enforced)")
+    lookback = st.slider("Lookback (weeks)", 12, 104, 52, step=1)
+    momentum = st.slider("Momentum (weeks)", 4, 26, 13, step=1)
+    tail_len = st.slider("Tail length (weeks)", 4, 26, 13, step=1)
 
-    lookback_weeks = st.slider("Lookback (weeks)", min_value=8, max_value=104, value=52, step=1)
-    momentum_weeks = st.slider("Momentum (weeks)", min_value=4, max_value=52, value=13, step=1)
-    tail_len = st.slider("Tail length (weeks)", min_value=4, max_value=30, value=13, step=1)
-
-    st.markdown("---")
+    st.divider()
     st.subheader("Manage Universe")
 
+    # Template download
+    tmpl = sample_universe_template()
+    buf = BytesIO()
+    tmpl.to_csv(buf, index=False)
     st.download_button(
         "Download CSV template",
-        data=template_csv_bytes(),
+        data=buf.getvalue(),
         file_name="rrg_universe_template.csv",
         mime="text/csv",
-        use_container_width=True,
     )
 
     uploaded = st.file_uploader("Upload Universe (CSV or XLSX)", type=["csv", "xlsx", "xls"])
+    use_upload = st.checkbox("Use uploaded universe (merge with selected universe)", value=True, disabled=(uploaded is None))
 
-    use_uploaded = st.checkbox("Use uploaded universe", value=False)
+# Build base universe meta
+base_meta = universes[universe_name].copy()
 
-    extra_tickers_raw = st.text_input("Extra tickers (comma-separated)", value="", placeholder="e.g. QQQ, IWM, HYG")
+# Read upload and merge
+upload_df, upload_err = read_uploaded_universe(uploaded)
+if upload_err:
+    st.error(f"Upload error: {upload_err}")
 
-    colA, colB = st.columns(2)
-    with colA:
-        clear_cache = st.button("Refresh / Clear cache", use_container_width=True)
-    with colB:
-        pass
-
-if clear_cache:
-    st.cache_data.clear()
-    st.rerun()
-
-# Parse uploaded file (if any)
-uploaded_df = pd.DataFrame(columns=["Group", "Ticker", "Name"])
-upload_error = None
-if uploaded is not None:
-    try:
-        uploaded_df = parse_uploaded_universe(uploaded)
-    except Exception as e:
-        upload_error = str(e)
-
-if upload_error:
-    st.error(f"Upload error: {upload_error}")
-
-# Build active universe table
-base_universe = universes[universe_name]
-if use_uploaded and not uploaded_df.empty:
-    active_universe = merge_universes(base_universe, uploaded_df)
+if uploaded is not None and use_upload and upload_err == "":
+    meta = merge_universe(base_meta, upload_df)
+    meta["Group"] = meta["Group"].replace("", universe_name)
+    source_note = f"Using **{universe_name}** merged with uploaded file."
 else:
-    active_universe = base_universe.copy()
+    meta = base_meta
+    source_note = f"Using **{universe_name}**."
 
-# Filter active_universe to current selected Universe group label:
-# (we keep Group column for display; the Universe drop-down is the “view”)
-active_universe["Group"] = active_universe["Group"].fillna(universe_name)
+st.markdown(source_note)
 
-# Allow choose ETFs
-choices = (
-    active_universe.assign(Label=lambda d: d["Ticker"] + " — " + d["Name"])
-    .sort_values("Label")["Label"]
-    .tolist()
-)
-default_labels = (
-    base_universe.assign(Label=lambda d: d["Ticker"] + " — " + d["Name"])
-    .sort_values("Label")["Label"]
-    .tolist()
-)
+# ETF selector
+# Keep selectable list to manage chaos if user uploads huge universes
+options = [f"{r['Ticker']} ({r['Name']})" for _, r in meta.iterrows()]
+label_to_ticker = {f"{r['Ticker']} ({r['Name']})": r["Ticker"] for _, r in meta.iterrows()}
 
-with st.sidebar:
-    selected_labels = st.multiselect(
-        "Choose ETFs",
-        options=choices,
-        default=default_labels[: min(11, len(default_labels))],
+default_count = min(10, len(options))
+default_sel = options[:default_count]
+
+selected_labels = st.sidebar.multiselect("Choose ETFs", options, default=default_sel)
+selected = [label_to_ticker[x] for x in selected_labels]
+selected = [t for t in selected if t != benchmark]
+
+if not selected:
+    st.warning("Select at least 1 ETF to plot.")
+    st.stop()
+
+# Pull prices
+tickers = sorted(list(dict.fromkeys(selected + [benchmark])))
+
+with st.spinner("Downloading prices..."):
+    px_daily = fetch_prices(tickers, period_years=period_years)
+
+if px_daily.empty:
+    st.error("No price data returned. Try fewer symbols or a different benchmark.")
+    st.stop()
+
+# Ensure all requested columns exist
+missing = [t for t in tickers if t not in px_daily.columns]
+if missing:
+    st.warning(f"Dropped missing tickers (no daily data): {', '.join(missing)}")
+    tickers = [t for t in tickers if t in px_daily.columns]
+    px_daily = px_daily[tickers]
+
+# Timeframe transform
+if timeframe == "Weekly":
+    px = to_weekly(px_daily)
+else:
+    # For "Daily" view, convert to weekly-like cadence for RRG calculations,
+    # but based on daily history. This keeps RRG interpretable while still reacting faster.
+    px = to_weekly(px_daily)
+
+# Compute RRG series
+rrg_series = compute_rrg(px, benchmark=benchmark, lookback=lookback, momentum=momentum)
+
+# Warn dropped symbols for insufficient history
+dropped = [t for t in selected if t not in rrg_series]
+if dropped:
+    st.warning(
+        "Some symbols were dropped due to insufficient history for your settings: "
+        + ", ".join(dropped)
     )
 
-# Convert labels to tickers
-label_to_ticker = (
-    active_universe.assign(Label=lambda d: d["Ticker"] + " — " + d["Name"])
-    .set_index("Label")["Ticker"]
-    .to_dict()
-)
-
-selected_tickers = [label_to_ticker[lbl] for lbl in selected_labels if lbl in label_to_ticker]
-extra_tickers = [t.strip().upper() for t in extra_tickers_raw.split(",") if t.strip()]
-tickers_all = list(dict.fromkeys([benchmark] + selected_tickers + extra_tickers))
-
-# Build meta for colors & names
-meta = active_universe[active_universe["Ticker"].isin(selected_tickers)].copy()
-# add extra tickers (if any) as self-named
-for t in extra_tickers:
-    if t not in meta["Ticker"].tolist():
-        meta = pd.concat(
-            [meta, pd.DataFrame([{"Group": "Extra", "Ticker": t, "Name": t}])],
-            ignore_index=True,
-        )
-
-meta = meta.drop_duplicates(subset=["Ticker"], keep="first").reset_index(drop=True)
-meta = assign_colors(meta)
-
-# Data period/interval
-if timeframe == "Daily":
-    period = "1y"
-    interval = "1d"
-else:
-    period = "3y"
-    interval = "1d"  # download daily then resample for consistent handling
-
-# Download prices
-try:
-    close_daily = yf_download_close(tuple(tickers_all), period=period, interval=interval)
-    if close_daily.empty:
-        st.warning("No data returned from Yahoo Finance. Try fewer symbols or refresh.")
-        st.stop()
-
-    if timeframe == "Weekly":
-        prices = to_weekly(close_daily)
-    else:
-        prices = close_daily
-
-    # Ensure benchmark exists
-    if benchmark not in prices.columns:
-        st.error(f"Benchmark {benchmark} did not return price data from Yahoo Finance.")
-        st.stop()
-
-except Exception as e:
-    st.error(f"Error downloading data from Yahoo Finance: {e}")
+if not rrg_series:
+    st.error("Not enough data to build RRG (try shorter lookback/momentum or fewer symbols).")
     st.stop()
 
-# Compute RRG data
-rrg = compute_rrg_components(prices, benchmark=benchmark, lookback_weeks=lookback_weeks, momentum_weeks=momentum_weeks)
+# Limit to selected tickers that computed successfully
+rrg_series = {k: v for k, v in rrg_series.items() if k in selected}
 
-if rrg.empty:
-    st.warning("Not enough data to build RRG (try shorter lookback / momentum window or remove very new ETFs).")
-    st.stop()
-
-# Title
+# Chart
+auto_zoom = st.toggle("Auto-zoom chart", value=True, help="Auto-fit axes to plotted points to reduce clutter.")
 title = f"{universe_name} vs {benchmark} ({timeframe})"
 
-# Plot
-fig = make_rrg_figure(rrg, meta=meta, tail_len=tail_len, title=title)
-st.plotly_chart(fig, use_container_width=True)
+chart, color_map = make_rrg_figure(
+    rrg_series=rrg_series,
+    meta=meta,
+    tail_len=tail_len,
+    title=title,
+    auto_zoom=auto_zoom,
+    fixed_range=4.0,
+)
+
+st.altair_chart(chart, use_container_width=True)
 
 # Snapshot tables
-st.subheader("Latest RRG Snapshot (interpreted)")
-
-snap = compute_snapshot(rrg, meta)
+snap = build_snapshot(rrg_series, meta=meta)
 if snap.empty:
-    st.info("No snapshot available (need at least 2 points per symbol).")
+    st.warning("Could not build snapshot table (not enough points).")
     st.stop()
 
-# Top 3 Leading & Top 3 Improving
+# Merge colors onto snapshot
+snap = snap.merge(color_map[["Ticker", "ColorHex"]], on="Ticker", how="left")
+snap["ColorHex"] = snap["ColorHex"].fillna("#444444")
+
+st.subheader("Latest RRG Snapshot (interpreted)")
+
+# Top 3 Leading / Improving
 leading = snap[snap["Quadrant"] == "Leading"].copy()
 improving = snap[snap["Quadrant"] == "Improving"].copy()
 
-# rank: Leading by RS_Ratio_val descending; Improving by RS_Ratio_val descending (closest to 0 is stronger)
-leading = leading.sort_values(["RS_Ratio_val", "RS_Momentum_val"], ascending=[False, False]).head(3)
-improving = improving.sort_values(["RS_Ratio_val", "RS_Momentum_val"], ascending=[False, False]).head(3)
+leading["Score"] = leading["_x"] + leading["_y"]
+improving["Score"] = improving["_y"] - improving["_x"].abs()
 
-left, right = st.columns(2)
+top_leading = leading.sort_values(["Score"], ascending=False).head(3)
+top_improving = improving.sort_values(["Score"], ascending=False).head(3)
 
-with left:
-    st.markdown("**Top 3 Leading**")
-    render_color_table(
-        leading[
-            ["Ticker", "Name", "Group", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "_COLORHEX"]
-        ],
-        hide_cols=["_COLORHEX"],
-    )
+c1, c2 = st.columns(2)
 
-with right:
-    st.markdown("**Top 3 Improving**")
-    render_color_table(
-        improving[
-            ["Ticker", "Name", "Group", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "_COLORHEX"]
-        ],
-        hide_cols=["_COLORHEX"],
-    )
+with c1:
+    st.markdown("### Top 3 Leading")
+    if top_leading.empty:
+        st.caption("No symbols currently in the Leading quadrant.")
+    else:
+        show = top_leading[["Ticker", "Name", "Group", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "Quadrant", "ColorHex"]].copy()
+        st.dataframe(style_color_swatch(show), use_container_width=True, hide_index=True)
 
-# Full universe snapshot (expander)
+with c2:
+    st.markdown("### Top 3 Improving")
+    if top_improving.empty:
+        st.caption("No symbols currently in the Improving quadrant.")
+    else:
+        show = top_improving[["Ticker", "Name", "Group", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "Quadrant", "ColorHex"]].copy()
+        st.dataframe(style_color_swatch(show), use_container_width=True, hide_index=True)
+
+# Full universe snapshot
 with st.expander("Universe Snapshot Table (all selected symbols)", expanded=True):
-    render_color_table(
-        snap[
-            ["Ticker", "Name", "Group", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "Quadrant", "_COLORHEX"]
-        ],
-        hide_cols=["_COLORHEX"],
-    )
+    full = snap.copy()
+    # Display columns only (no internals)
+    full_show = full[["Ticker", "Name", "Group", "RS-Ratio", "Momentum", "Direction", "Rotation Speed", "Quadrant", "ColorHex"]].copy()
+    st.dataframe(style_color_swatch(full_show), use_container_width=True, hide_index=True)
 
-# Upload status help
-if uploaded is not None:
-    if use_uploaded and not uploaded_df.empty and not upload_error:
-        st.success("Uploaded universe is active. Your file is being used (uploaded tickers take precedence).")
-    elif not use_uploaded and not upload_error:
-        st.info("File uploaded, but 'Use uploaded universe' is OFF. Turn it on to apply your file.")
+# Helpful note about XLSX
+if uploaded is not None and uploaded.name.lower().endswith((".xlsx", ".xls")) and upload_err:
+    st.info("Fix: add **openpyxl** to requirements.txt, redeploy, then try uploading XLSX again. CSV uploads work without it.")
