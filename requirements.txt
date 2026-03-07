@@ -4,3 +4,4 @@ pandas
 numpy
 python-dateutil
 plotly==5.15.0
+openpyxl
